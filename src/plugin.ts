@@ -104,7 +104,7 @@ function createServer() {
     description: "Lists Pendle fixed-rate opportunities (Principal Tokens) the user can lock in from a PayBox wallet. "
       + "A PT bought today redeems for one unit of its accounting asset at maturity, so the APY is fixed if held to maturity. "
       + "Each row compares the fixed rate with the asset's current variable APY and carries risk flags. "
-      + "Next: explain_fixed_yield_market for details, then quote_fixed_yield.",
+      + "Next: explain_fixed_yield_market for details, then quote_fixed_yield (one market) or plan_fixed_yield_ladder (spread across maturities).",
     inputSchema: z.object({
       chain: chainFilter,
       asset: z.enum(["any", "usd", "eth", "btc", "hype"]).default("any").describe("usd = stablecoin yields."),

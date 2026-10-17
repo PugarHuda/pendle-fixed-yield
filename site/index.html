@@ -66,6 +66,7 @@ tr:last-child td{border-bottom:0}
 tbody tr{cursor:pointer}
 tbody tr:hover{background:rgba(255,255,255,.035)}
 tbody tr.sel{background:rgba(255,106,26,.08)}
+tbody tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* live maturity ladder labels pinned to the 3D steps */
 .rung{position:absolute;z-index:2;left:0;top:0;pointer-events:none;opacity:0;transition:opacity .6s;
   padding:7px 11px;border-radius:10px;background:rgba(10,11,14,.66);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);
@@ -123,13 +124,13 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
   <canvas id="scene" aria-hidden="true"></canvas>
   <nav aria-label="Main">
     <a class="logo" href="#"><i>%</i>Fixed Yield</a>
-    <div class="links"><a href="#how">How it works</a><a href="#rates">Live rates</a><a href="#tools">Tools</a><a href="#safety">Safety</a></div>
+    <div class="links"><a href="https://paybox.sh">PayBox</a><a href="#how">How it works</a><a href="#rates">Live rates</a><a href="#tools">Tools</a><a href="#safety">Safety</a></div>
     <a class="btn ghost small" href="https://github.com/PugarHuda/pendle-fixed-yield">GitHub</a>
   </nav>
   <div id="rungs" aria-hidden="true"></div>
   <div class="hero-body"><div class="wrap" style="width:100%"><div class="hero-copy">
     <h1>Lock a fixed rate on every idle dollar</h1>
-    <p class="sub">Your PayBox agent finds Pendle fixed yields, quotes them, deposits, and rolls them over at maturity. It verifies every route before you approve.</p>
+    <p class="sub">Your <a href="https://paybox.sh" style="color:#fff">PayBox</a> agent finds Pendle fixed yields, quotes them, deposits, and rolls them over at maturity. It verifies every route before you approve.</p>
     <div class="ctas"><a class="btn primary" href="#rates">See live rates</a><a class="btn ghost" href="https://github.com/PugarHuda/pendle-fixed-yield">View source</a></div>
     <div class="stats">
       <div class="stat"><b id="s-best" class="live">—</b><span id="s-best-l">best fixed APY, liquidity ≥ $250k</span></div>
@@ -225,7 +226,7 @@ node scripts/qa.mjs                     # 42 live cases
 pnpm exec tsx scripts/check-routes.ts   # router verification incl. tamper refusal</pre>
   </section>
 
-  <footer><a href="https://github.com/PugarHuda/pendle-fixed-yield">github.com/PugarHuda/pendle-fixed-yield</a> · Built for the MoonPay PayBox Hackathon. This page reads public Pendle data and is not financial advice.</footer>
+  <footer><a href="https://github.com/PugarHuda/pendle-fixed-yield">github.com/PugarHuda/pendle-fixed-yield</a> · Runs in <a href="https://paybox.sh">PayBox</a> (<a href="https://docs.paybox.sh">docs</a>) · Built for the MoonPay PayBox Hackathon. This page reads public Pendle data and is not financial advice.</footer>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu" crossorigin="anonymous"></script>
@@ -250,7 +251,7 @@ function render() {
   const chain = $("chain").value, asset = $("asset").value, liq = $("liq").checked;
   const rows = markets.filter((m) => (!chain || m.chainId == chain) && (!asset || ASSET[asset].test(m.name)) && (!liq || m.liquidity >= 250e3))
     .sort((a, b) => b.fixed - a.fixed).slice(0, 25);
-  $("rows").innerHTML = rows.length ? rows.map((m) => `<tr data-id="${m.id}" class="${m.id === $("c-mkt").value ? "sel" : ""}"><td>${esc(m.name)}${m.fixed > m.variable * 3 && m.variable > 0 ? '<span class="flag">wide spread</span>' : ""}</td><td class="num fixed">${pct(m.fixed)}</td><td>${m.expiry}</td><td>${CHAINS[m.chainId]}</td><td class="num">${pct(m.variable)}</td><td class="num">${usd(m.liquidity)}</td></tr>`).join("")
+  $("rows").innerHTML = rows.length ? rows.map((m) => `<tr tabindex="0" data-id="${m.id}" class="${m.id === $("c-mkt").value ? "sel" : ""}"><td>${esc(m.name)}${m.fixed > m.variable * 3 && m.variable > 0 ? '<span class="flag">wide spread</span>' : ""}</td><td class="num fixed">${pct(m.fixed)}</td><td>${m.expiry}</td><td>${CHAINS[m.chainId]}</td><td class="num">${pct(m.variable)}</td><td class="num">${usd(m.liquidity)}</td></tr>`).join("")
     : '<tr><td colspan="6">No market matches these filters.</td></tr>';
 }
 async function load() {
@@ -314,14 +315,16 @@ function calc() {
 $("c-amt").addEventListener("input", () => { $("c-rng").value = $("c-amt").value; calc(); });
 $("c-rng").addEventListener("input", () => { $("c-amt").value = $("c-rng").value; calc(); });
 $("c-mkt").addEventListener("change", calc);
-$("rows").addEventListener("click", (e) => {
+const pickRow = (e) => {
   const tr = e.target.closest("tr[data-id]");
   if (!tr) return;
   const m = markets.find((x) => x.id === tr.dataset.id);
   if (![...$("c-mkt").options].some((o) => o.value === m.id)) $("c-mkt").add(new Option(`${m.name} · ${CHAINS[m.chainId]} · ${m.expiry} · ${pct(m.fixed)}`, m.id));
   $("c-mkt").value = m.id; calc();
   $("calc").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
-});
+};
+$("rows").addEventListener("click", pickRow);
+$("rows").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickRow(e); } });
 
 // Reveal sections as they scroll in.
 const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { e.target.classList.add("seen"); io.unobserve(e.target); } }, { rootMargin: "0px 0px 20% 0px" }); // start before a section enters, so a fast scroll never lands on a blank block

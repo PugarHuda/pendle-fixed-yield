@@ -8,6 +8,7 @@ The plugin never signs anything. Each wallet action is an unsigned proposal that
 - **Live page:** https://pendle-fixed-yield.vercel.app shows current fixed rates, a live maturity ladder and a
   calculator. Its source is in `site/`.
 - **Repository:** https://github.com/PugarHuda/pendle-fixed-yield
+- **PayBox:** https://paybox.sh (docs: https://docs.paybox.sh, developer portal: https://developer.paybox.sh)
 - Built for the MoonPay PayBox Hackathon (Chapter 1).
 
 > "Put 25 USDC somewhere it earns a fixed rate until February."
