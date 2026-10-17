@@ -63,7 +63,31 @@ th,td{padding:13px 18px;text-align:left;border-bottom:1px solid var(--line);whit
 th{color:var(--muted);font-weight:500;font-size:13px}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:0}
-tbody tr:hover{background:rgba(255,255,255,.025)}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:rgba(255,255,255,.035)}
+tbody tr.sel{background:rgba(255,106,26,.08)}
+/* live maturity ladder labels pinned to the 3D steps */
+.rung{position:absolute;z-index:2;left:0;top:0;pointer-events:none;opacity:0;transition:opacity .6s;
+  padding:7px 11px;border-radius:10px;background:rgba(10,11,14,.66);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);
+  font-size:12px;line-height:1.3;white-space:nowrap;color:#c3c6cf}
+.rung b{display:block;color:#fff;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.rung.on{opacity:1}
+.rung i{font-style:normal;color:var(--accent2);font-weight:600;letter-spacing:.06em;font-size:10px;text-transform:uppercase}
+/* calculator */
+.calc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}
+.calc .in,.calc .out{padding:24px}
+.calc .out{border-left:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:18px 24px;align-content:start}
+.calc label{display:block;font-size:13px;color:var(--muted);margin-bottom:16px}
+.calc input[type=number],.calc select{display:block;width:100%;margin-top:6px;font:500 16px Inter,sans-serif;background:#16181d;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:11px 12px}
+.calc input[type=range]{width:100%;accent-color:var(--accent);margin-top:10px}
+.kv span{display:block;font-size:13px;color:var(--muted)}
+.kv b{font-size:clamp(22px,2.6vw,30px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kv b.hi{color:var(--accent2)}
+.kv small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.calc .note{grid-column:1/-1;font-size:13px;color:var(--muted);margin:0}
+/* scroll reveal (only when JS runs) */
+.js .reveal{opacity:0;transform:translateY(28px);transition:opacity .55s ease,transform .7s cubic-bezier(.2,.7,.2,1)}
+.js .reveal.seen{opacity:1;transform:none}
 .fixed{color:var(--accent2);font-weight:600}
 .flag{color:var(--warn);font-size:12px;margin-left:6px}
 #status{color:var(--muted);font-size:13px;margin-top:10px}
@@ -82,13 +106,16 @@ pre{background:#101115;border:1px solid var(--line);border-radius:14px;padding:1
 footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
 
 @media (max-width:820px){
+  .rung{display:none}
+  .calc{grid-template-columns:1fr}
+  .calc .out{border-left:0;border-top:1px solid var(--line)}
   .links{display:none}
   nav{padding:10px 10px 10px 16px}
   .hero::after{background:linear-gradient(180deg,rgba(12,13,17,.88) 0%,rgba(12,13,17,.55) 48%,rgba(12,13,17,0) 64%,rgba(12,13,17,0) 88%,var(--bg) 100%)}
   .hero-copy{padding:40px 0 260px}
   .stats{gap:20px}
 }
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.stat b.live::after{animation:none}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.stat b.live::after{animation:none}.js .reveal{transform:none;transition:none}}
 </style>
 </head>
 <body>
@@ -99,6 +126,7 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
     <div class="links"><a href="#how">How it works</a><a href="#rates">Live rates</a><a href="#tools">Tools</a><a href="#safety">Safety</a></div>
     <a class="btn ghost small" href="https://github.com/PugarHuda/pendle-fixed-yield">GitHub</a>
   </nav>
+  <div id="rungs" aria-hidden="true"></div>
   <div class="hero-body"><div class="wrap" style="width:100%"><div class="hero-copy">
     <h1>Lock a fixed rate on every idle dollar</h1>
     <p class="sub">Your PayBox agent finds Pendle fixed yields, quotes them, deposits, and rolls them over at maturity. It verifies every route before you approve.</p>
@@ -112,14 +140,14 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
 </header>
 
 <main class="wrap">
-  <section class="block" id="how">
+  <section class="block reveal" id="how">
     <p class="eyebrow">How it works</p>
     <p class="quote">“Put 25 USDC somewhere it earns a fixed rate until February.”</p>
-    <p class="lead">The agent finds the best market, explains its risks, quotes the rate, then proposes an exact-amount approval and the deposit. At maturity it rolls the PT into the next one in one transaction, like the coin climbing the steps above.</p>
+    <p class="lead">The agent finds the best market, explains its risks, quotes the rate, then proposes an exact-amount approval and the deposit. At maturity the PT redeems back to you, like the coin coming down the steps above, or rolls into the next maturity in one transaction.</p>
     <div class="flow"><span class="on">Find</span><span class="on">Explain</span><span class="on">Quote</span><span>Approve exact amount</span><span>Deposit</span><span>Track</span><span>Exit or roll over</span></div>
   </section>
 
-  <section class="block" id="rates">
+  <section class="block reveal" id="rates">
     <p class="eyebrow">Live from Pendle</p>
     <h2>Fixed rates right now</h2>
     <p class="lead">These are the same markets the plugin searches, fetched straight from Pendle when you load this page. The rate is fixed only if you hold the PT to maturity.</p>
@@ -135,7 +163,26 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
     <div id="status" role="status"></div>
   </section>
 
-  <section class="block" id="tools">
+  <section class="block reveal" id="calc">
+    <p class="eyebrow">Calculator</p>
+    <h2>What would you get?</h2>
+    <p class="lead">Pick a market (or click a row above) and an amount. The fixed result uses the same compounding the plugin quotes. The variable line shows what today's variable APY would earn over the same period, which is not guaranteed.</p>
+    <div class="panel calc">
+      <div class="in">
+        <label>Amount (USD)<input type="number" id="c-amt" min="1" step="any" value="1000"><input type="range" id="c-rng" min="100" max="100000" step="100" value="1000" aria-label="Amount slider"></label>
+        <label>Market<select id="c-mkt"><option>Loading…</option></select></label>
+      </div>
+      <div class="out">
+        <div class="kv"><span>At maturity, fixed</span><b class="hi" id="c-end">—</b><small id="c-date"></small></div>
+        <div class="kv"><span>Locked-in gain</span><b id="c-gain">—</b><small id="c-apy"></small></div>
+        <div class="kv"><span>Same period at today's variable APY</span><b id="c-var">—</b><small id="c-var-apy"></small></div>
+        <div class="kv"><span>Fixed vs variable</span><b id="c-diff">—</b><small>difference at maturity</small></div>
+        <p class="note">The plugin's <code>quote_fixed_yield</code> gives the exact PT amount, price impact and fees for your real wallet before anything is proposed.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block reveal" id="tools">
     <p class="eyebrow">Seven tools</p>
     <h2>The whole fixed-yield lifecycle</h2>
     <p class="lead">Four tools read and three return proposals. A proposal is never signed by the plugin.</p>
@@ -150,7 +197,7 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
     </div>
   </section>
 
-  <section class="block" id="safety">
+  <section class="block reveal" id="safety">
     <p class="eyebrow">Safety</p>
     <h2>Why you can trust the proposal</h2>
     <ul class="safe">
@@ -162,13 +209,13 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
     </ul>
   </section>
 
-  <section class="block">
+  <section class="block reveal">
     <p class="eyebrow">Chains</p>
     <h2>Verified with PayBox simulation</h2>
     <div class="chains"><span>Ethereum</span><span>Base</span><span>Arbitrum</span><span>HyperEVM</span><span>Robinhood Chain</span><span>BNB Chain</span><span>Monad</span><span>Plasma</span></div>
   </section>
 
-  <section class="block" id="build">
+  <section class="block reveal" id="build">
     <p class="eyebrow">Build</p>
     <h2>Run it yourself</h2>
     <pre>pnpm install --frozen-lockfile
@@ -187,7 +234,14 @@ const CHAINS = {1:"Ethereum",8453:"Base",42161:"Arbitrum",999:"HyperEVM",4663:"R
 const ASSET = { usd:/usd|dai|usx|gho|frax|sgov|usde|usdt|usdc/i, eth:/eth/i, btc:/btc/i };
 const $ = (id) => document.getElementById(id);
 for (const [id, n] of Object.entries(CHAINS)) $("chain").add(new Option(n, id));
+document.documentElement.classList.add("js");
 let markets = [];
+const ladder = []; // filled from live data, read by the 3D scene to label its steps
+let redraw = () => {}; // the scene replaces this when it renders on demand (reduced motion)
+const DAY = 86400e3;
+const daysTo = (iso) => Math.max(0, (Date.parse(iso) - Date.now()) / DAY);
+const money = (x) => "$" + x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const isUsd = (m) => ASSET.usd.test(m.name);
 const pct = (x) => (x * 100).toFixed(2) + "%";
 const usd = (x) => x >= 1e6 ? "$" + (x / 1e6).toFixed(1) + "M" : "$" + Math.round(x / 1e3) + "k";
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" })[c]);
@@ -195,7 +249,7 @@ function render() {
   const chain = $("chain").value, asset = $("asset").value, liq = $("liq").checked;
   const rows = markets.filter((m) => (!chain || m.chainId == chain) && (!asset || ASSET[asset].test(m.name)) && (!liq || m.liquidity >= 250e3))
     .sort((a, b) => b.fixed - a.fixed).slice(0, 25);
-  $("rows").innerHTML = rows.length ? rows.map((m) => `<tr><td>${esc(m.name)}${m.fixed > m.variable * 3 && m.variable > 0 ? '<span class="flag">wide spread</span>' : ""}</td><td class="num fixed">${pct(m.fixed)}</td><td>${m.expiry}</td><td>${CHAINS[m.chainId]}</td><td class="num">${pct(m.variable)}</td><td class="num">${usd(m.liquidity)}</td></tr>`).join("")
+  $("rows").innerHTML = rows.length ? rows.map((m) => `<tr data-id="${m.id}" class="${m.id === $("c-mkt").value ? "sel" : ""}"><td>${esc(m.name)}${m.fixed > m.variable * 3 && m.variable > 0 ? '<span class="flag">wide spread</span>' : ""}</td><td class="num fixed">${pct(m.fixed)}</td><td>${m.expiry}</td><td>${CHAINS[m.chainId]}</td><td class="num">${pct(m.variable)}</td><td class="num">${usd(m.liquidity)}</td></tr>`).join("")
     : '<tr><td colspan="6">No market matches these filters.</td></tr>';
 }
 async function load() {
@@ -204,12 +258,13 @@ async function load() {
       const r = await fetch(`https://api-v2.pendle.finance/core/v2/markets/all?isActive=true&limit=100&skip=${skip}`);
       if (!r.ok) throw new Error(`Pendle API ${r.status}`);
       const d = await r.json();
-      for (const m of d.results) if (CHAINS[m.chainId] && m.details) markets.push({ name: m.name, chainId: m.chainId, expiry: m.expiry.slice(0, 10), fixed: m.details.impliedApy ?? 0, variable: m.details.underlyingApy ?? 0, liquidity: m.details.liquidity ?? 0 });
+      for (const m of d.results) if (CHAINS[m.chainId] && m.details) markets.push({ id: `${m.chainId}:${m.address}`, name: m.name, chainId: m.chainId, expiry: m.expiry.slice(0, 10), fixed: m.details.impliedApy ?? 0, variable: m.details.underlyingApy ?? 0, liquidity: m.details.liquidity ?? 0 });
       if (d.results.length < 100) break;
     }
     const best = markets.filter((m) => m.liquidity >= 250e3).sort((a, b) => b.fixed - a.fixed)[0];
     if (best) { $("s-best").textContent = pct(best.fixed); $("s-best-l").textContent = `best fixed APY · ${best.name} on ${CHAINS[best.chainId]}`; }
     $("s-markets").textContent = markets.length;
+    buildLadder(); fillCalc(); redraw();
     $("status").textContent = `${markets.length} active markets · fetched ${new Date().toLocaleTimeString()} from api-v2.pendle.finance`;
     render();
   } catch (e) {
@@ -218,6 +273,58 @@ async function load() {
   }
 }
 for (const id of ["chain", "asset", "liq"]) $(id).addEventListener("change", render);
+
+// Maturity ladder: the best liquid stablecoin fixed rate in each of the next maturity months, earliest first.
+function buildLadder() {
+  const byMonth = new Map();
+  for (const m of markets) {
+    if (!isUsd(m) || m.liquidity < 250e3 || daysTo(m.expiry) < 14) continue;
+    const k = m.expiry.slice(0, 7);
+    if (!byMonth.has(k) || byMonth.get(k).fixed < m.fixed) byMonth.set(k, m);
+  }
+  ladder.push(...[...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(0, 4).map(([k, m]) => ({
+    month: new Date(k + "-15").toLocaleDateString("en-US", { month: "short", year: "numeric" }), apy: pct(m.fixed), name: m.name, chain: CHAINS[m.chainId],
+  })));
+}
+
+// Calculator: same compounding as the plugin's quote, (1 + apy) ^ (days / 365).
+function fillCalc() {
+  const opts = markets.filter((m) => m.liquidity >= 250e3 && daysTo(m.expiry) >= 7 && m.fixed > 0).sort((a, b) => b.fixed - a.fixed);
+  $("c-mkt").innerHTML = opts.map((m) => `<option value="${m.id}">${esc(m.name)} · ${CHAINS[m.chainId]} · ${m.expiry} · ${pct(m.fixed)}</option>`).join("");
+  const firstUsd = opts.find(isUsd);
+  if (firstUsd) $("c-mkt").value = firstUsd.id;
+  calc();
+}
+function calc() {
+  const m = markets.find((x) => x.id === $("c-mkt").value);
+  const amt = Math.max(0, Number($("c-amt").value) || 0);
+  if (!m) return;
+  const years = daysTo(m.expiry) / 365;
+  const end = amt * (1 + m.fixed) ** years, varEnd = amt * (1 + m.variable) ** years;
+  $("c-end").textContent = money(end);
+  $("c-date").textContent = `on ${m.expiry} · ${Math.floor(years * 365)} days`;
+  $("c-gain").textContent = "+" + money(end - amt);
+  $("c-apy").textContent = `${pct(m.fixed)} fixed APY`;
+  $("c-var").textContent = money(varEnd);
+  $("c-var-apy").textContent = `${pct(m.variable)} variable APY, can change`;
+  $("c-diff").textContent = (end >= varEnd ? "+" : "−") + money(Math.abs(end - varEnd));
+  for (const tr of document.querySelectorAll("#rows tr[data-id]")) tr.classList.toggle("sel", tr.dataset.id === m.id);
+}
+$("c-amt").addEventListener("input", () => { $("c-rng").value = $("c-amt").value; calc(); });
+$("c-rng").addEventListener("input", () => { $("c-amt").value = $("c-rng").value; calc(); });
+$("c-mkt").addEventListener("change", calc);
+$("rows").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr) return;
+  const m = markets.find((x) => x.id === tr.dataset.id);
+  if (![...$("c-mkt").options].some((o) => o.value === m.id)) $("c-mkt").add(new Option(`${m.name} · ${CHAINS[m.chainId]} · ${m.expiry} · ${pct(m.fixed)}`, m.id));
+  $("c-mkt").value = m.id; calc();
+  $("calc").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+});
+
+// Reveal sections as they scroll in.
+const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { e.target.classList.add("seen"); io.unobserve(e.target); } }, { rootMargin: "0px 0px 20% 0px" }); // start before a section enters, so a fast scroll never lands on a blank block
+document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
 load();
 
 // ---- hero scene: a coin rolls along a lit path and climbs a maturity ladder of metal steps ----
@@ -283,6 +390,7 @@ load();
   for (const s of STEPS) {
     const b = new THREE.Mesh(new THREE.BoxGeometry(2.4, s.h, 2.4), metal);
     b.position.set(s.x, s.h / 2, 0); b.castShadow = b.receiveShadow = true; world.add(b);
+    s.el = $("rungs").appendChild(Object.assign(document.createElement("div"), { className: "rung" }));
   }
 
   // Coin with an octagonal recess and a four-point star, like the reference.
@@ -308,37 +416,36 @@ load();
   scene.add(key, key.target);
   const rimLight = new THREE.DirectionalLight(0xb9bdff, 0.6); rimLight.position.set(12, 8, -10); scene.add(rimLight);
 
-  // Coin route: roll along the path, then hop up each step (a roll-over into the next maturity).
-  const segs = [{ type: "roll", from: [-16, 0], to: [PATH_END - R - 0.05, 0], dur: 5.2 }];
+  // Coin route, as in the reference: appear on the top step, hop down each step, then roll along the path toward the
+  // viewer (a matured PT coming back to you).
+  const top = STEPS[STEPS.length - 1];
+  const segs = [{ type: "fade", from: [top.x, top.h], to: [top.x, top.h], dur: 0.8 }];
   let last = segs[0].to;
-  for (const s of STEPS) { const to = [s.x, s.h]; segs.push({ type: "hop", from: last, to, dur: 0.9 }); last = to; }
-  segs.push({ type: "fade", from: last, to: last, dur: 1.2 });
+  for (const s of [...STEPS].reverse().slice(1)) { const to = [s.x, s.h]; segs.push({ type: "hop", from: last, to, dur: 0.85 }); last = to; }
+  segs.push({ type: "hop", from: last, to: [PATH_END - R - 0.05, 0], dur: 0.85 });
+  segs.push({ type: "roll", from: [PATH_END - R - 0.05, 0], to: [-16, 0], dur: 5.4 });
   const total = segs.reduce((t, s) => t + s.dur, 0);
   const ease = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   coin.traverse((o) => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; } });
   const setOpacity = (a) => coin.traverse((o) => { if (o.material) o.material.opacity = a; });
 
+  // Spin follows x position, so the coin always rolls in the direction it travels.
+  function put(x, y, a) { coin.position.set(x, y + R + 0.06, 0); coin.rotation.z = -x / R; setOpacity(a); }
   function place(time) {
     let t = time % total;
     for (const s of segs) {
       if (t > s.dur) { t -= s.dur; continue; }
       const k = t / s.dur;
-      if (s.type === "roll") {
-        const e = 1 - Math.pow(1 - k, 2.2);
-        const x = s.from[0] + (s.to[0] - s.from[0]) * e;
-        coin.position.set(x, R + 0.06, 0); coin.rotation.z = -(x - s.from[0]) / R; setOpacity(1);
-      } else if (s.type === "hop") {
+      if (s.type === "fade") put(s.from[0], s.from[1], k);
+      else if (s.type === "hop") {
         const e = ease(k);
-        const x = s.from[0] + (s.to[0] - s.from[0]) * e;
-        const y = s.from[1] + (s.to[1] - s.from[1]) * e + Math.sin(Math.PI * k) * 1.1;
-        coin.position.set(x, y + R + 0.06, 0); coin.rotation.z -= 0.08; setOpacity(1);
-      } else {
-        coin.position.set(s.to[0], s.to[1] + R + 0.06, 0); setOpacity(1 - k);
-      }
+        put(s.from[0] + (s.to[0] - s.from[0]) * e, s.from[1] + (s.to[1] - s.from[1]) * e + Math.sin(Math.PI * k) * 0.9, 1);
+      } else put(s.from[0] + (s.to[0] - s.from[0]) * Math.pow(k, 1.6), 0, 1);
       return;
     }
   }
 
+  const tmp = new THREE.Vector3();
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
   const target = new THREE.Vector3(4.2, 2.2, 0);
   let base = new THREE.Vector3();
@@ -360,14 +467,26 @@ load();
   let visible = true, start = performance.now();
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(canvas);
   function frame(now) {
-    const t = still ? 4.6 : (now - start) / 1000;
+    const t = still ? 3.5 : (now - start) / 1000;
     place(t);
-    camera.position.set(base.x + pointer.x * 1.2, base.y - pointer.y * 0.6, base.z);
+    // Scrolling down the hero pulls the camera back and up, so the scene recedes as the page takes over.
+    const sy = Math.min(scrollY / innerHeight, 1);
+    camera.position.set(base.x + pointer.x * 1.2, base.y - pointer.y * 0.6 + sy * 3, base.z + sy * 7);
     camera.lookAt(target);
     renderer.render(scene, camera);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    STEPS.forEach((s, i) => {
+      const r = ladder[i];
+      if (!r) return;
+      if (!s.el.innerHTML) s.el.innerHTML = `<i>${r.month}</i><b>${r.apy}</b>${esc(r.name)} · ${r.chain}`;
+      world.localToWorld(tmp.set(s.x - 0.4, s.h + 0.2, 1.2)).project(camera);
+      s.el.style.transform = `translate(${(tmp.x + 1) / 2 * w}px, ${(1 - tmp.y) / 2 * h}px) translate(-50%, -100%)`;
+      s.el.classList.add("on");
+    });
     if (!still) requestAnimationFrame(loop);
   }
   function loop(now) { if (visible && !document.hidden) frame(now); else requestAnimationFrame(loop); }
+  if (still) { redraw = () => requestAnimationFrame(frame); addEventListener("scroll", redraw, { passive: true }); }
   requestAnimationFrame(frame);
 })();
 </script>

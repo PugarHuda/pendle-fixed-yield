@@ -1,52 +1,105 @@
-# Pendle Fixed Yield — PayBox plugin
+# Pendle Fixed Yield: PayBox plugin
 
-Lets a PayBox-connected agent lock in a **fixed rate** on idle stablecoins, ETH, BTC, HYPE or tokenized
-assets by buying [Pendle](https://pendle.finance) Principal Tokens — then do the due diligence, track the
-positions, exit them, and roll them into the next maturity when they expire. Everything is signed only
-after the user's PayBox approval.
+Lets a PayBox-connected agent lock in a **fixed rate** on idle stablecoins, ETH, BTC, HYPE or tokenized assets by
+buying [Pendle](https://pendle.finance) Principal Tokens. It then handles the rest of the lifecycle: due diligence,
+quoting, depositing, tracking the positions, exiting them, and rolling them into the next maturity when they expire.
+The plugin never signs anything. Each wallet action is an unsigned proposal that PayBox simulates and the user approves.
 
-Live page with current Pendle fixed rates: https://pendle-fixed-yield.vercel.app (source in `site/`).
-Repository: https://github.com/PugarHuda/pendle-fixed-yield
+- **Live page:** https://pendle-fixed-yield.vercel.app shows current fixed rates, a live maturity ladder and a
+  calculator. Its source is in `site/`.
+- **Repository:** https://github.com/PugarHuda/pendle-fixed-yield
+- Built for the MoonPay PayBox Hackathon (Chapter 1).
 
 > "Put 25 USDC somewhere it earns a fixed rate until February."
-> → finds the best Pendle market → explains its risks → quotes 8.7% fixed (≈ $25 → $25.8) →
-> exact-amount approval → deposit → PT in the wallet → at maturity, one-transaction roll-over.
+>
+> The agent finds the best Pendle market, explains its risks, and quotes the fixed rate
+> (for example 8.7% fixed, so $25 becomes about $25.8). It then proposes an exact-amount approval,
+> then the deposit, and the PT lands in the wallet. At maturity it rolls the PT into the next maturity
+> in one transaction.
 
-A PT bought today redeems for one unit of its accounting asset at maturity, so the APY is fixed if held to maturity.
+**Why a PT is a fixed rate.** A Principal Token trades at a discount and redeems for one unit of its accounting
+asset at maturity. Buying it today locks the discount as a fixed APY, provided the PT is held to maturity. Selling
+early happens at the market price.
 
 ## Tools
 
 | Tool | Kind | What it does |
 |---|---|---|
-| `find_fixed_yields` | read | Every active Pendle market on 8 PayBox chains in one call: fixed vs variable APY, premium, liquidity, TVL, protocol, risk flags; sort by rate, premium or liquidity |
-| `explain_fixed_yield_market` | read | Due diligence: Pendle's own asset description, risk notes and quirks, 30-day fixed/variable APY trend, live PT discount, points programs, accepted and redeem tokens with symbols |
-| `quote_fixed_yield` | read | PT received, effective fixed APY, USD value now and at maturity, projected gain, price impact, fee, approval and balance check |
-| `propose_fixed_yield_deposit` | proposal | Exact-amount approval (step 1/2) or the verified Pendle router deposit |
-| `get_fixed_yield_positions` | read | PT holdings across all chains with USD value; balances read on-chain, older markets discovered via Pendle's index; suggests a roll-over target |
-| `propose_fixed_yield_exit` | proposal | Redeem after maturity, or sell early at market price |
-| `propose_fixed_yield_rollover` | proposal | One transaction from an old PT into a later PT of the same asset (Pendle `callAndReflect`), auto-picking the best target |
+| `find_fixed_yields` | read | Every active Pendle market on 8 PayBox chains in one call. Shows fixed vs variable APY, premium, liquidity, TVL, protocol, `value_of_1000_at_maturity` and risk flags. Filters: `chain`, `asset` (usd/eth/btc/hype), `min_liquidity_usd`, `min_days`/`max_days`, `exclude_flagged`. Sorts by `fixed_apy`, `fixed_premium` or `liquidity`. |
+| `explain_fixed_yield_market` | read | Due diligence for one market: Pendle's own asset description, risk notes and quirks, the 30-day fixed and variable APY trend, the live PT price in its underlying, points programs, risk flags, and the accepted and redeem tokens with their symbols. Works for matured markets too. |
+| `quote_fixed_yield` | read | PT received, effective fixed APY, USD value now and at maturity, projected gain, price impact, fee, whether the aggregator is used, and approval and balance checks for the wallet. |
+| `propose_fixed_yield_deposit` | proposal | If the router needs an approval, returns an exact-amount approval (step 1 of 2). Otherwise returns the verified Pendle router deposit. Checks the balance first and refuses trades whose price impact is too high. |
+| `get_fixed_yield_positions` | read | PT holdings across all chains, valued in USD. Balances are read on-chain, and older or matured markets are found through Pendle's position index. Suggests a roll-over target. Chains whose RPC fails are listed in `chains_unavailable`, not silently skipped. |
+| `propose_fixed_yield_exit` | proposal | Redeems after maturity (`redeemPyToToken`) or sells early at the market price (`swapExactPtForToken`) into a token of the user's choice. Requests a PT approval first if needed. |
+| `propose_fixed_yield_rollover` | proposal | One transaction from an old PT into a later PT of the same asset, using Pendle Router `callAndReflect` through Pendle's Reflector. Works for matured PTs (redeemed) and active ones (sold at market). If no target is given, it picks the highest fixed rate on the same SY that matures at least 14 days out and has at least $50k of liquidity. |
 
-Chains: Ethereum, Base, Arbitrum, HyperEVM, Robinhood Chain, BNB Chain, Monad, Plasma (each verified with a PayBox portal simulation; X Layer is rejected by PayBox).
+Each tool has a strict input and output schema and MCP annotations (`readOnlyHint` and the others). Amounts are
+decimal strings converted to atomic units without floating point, and `"max"` means the full PT balance.
+
+### Risk flags
+
+| Flag | Meaning |
+|---|---|
+| `low_liquidity` | Pool liquidity under $250k, so exits may move the price |
+| `short_maturity` | Under 14 days left |
+| `new_market` | Pendle marks the market as new |
+| `volatile_underlying` | The underlying is not a stable asset (for example a tokenized stock or ETH) |
+| `fixed_far_above_variable` | The fixed rate is more than 5 points above, and more than twice, the variable rate. The cause is often an incentive or a risk premium, so check it |
+| `points_go_to_yt_not_pt` | The market has a points program, which accrues to YT holders, not PT |
 
 ## Safety
 
-- Never signs; returns `io.paybox/transactionProposal` EVM calls. PayBox simulates, asks for approval, signs.
-- Pendle's hosted API is treated as untrusted. The plugin decodes the calldata itself and only proposes
-  a route that targets the official Pendle Router V4 (`0x8888…F946`) and matches the plan exactly:
+- **Never signs.** It returns `io.paybox/transactionProposal` EVM calls, and PayBox simulates them, asks the user, and signs.
+- **Pendle's hosted API is treated as untrusted.** The plugin decodes the calldata itself and proposes a route only
+  if it targets the official Pendle Router V4 (`0x888888888889758F76e7103c6CbF23ABbF58F946`) and matches the plan exactly:
   - deposit: `swapExactTokenForPt(receiver = user, market = requested)`
-  - exit: `swapExactPtForToken` / `redeemPyToToken` with the user as receiver and the exact PT amount
-  - roll-over: `callAndReflect` whose reflector is Pendle's deployed Reflector for that chain (from
-    `pendle-core-v2-public/deployments`), whose first call consumes exactly the user's old PT, and whose
-    reflected call buys the requested new PT for the user
-  - native value must equal the deposit amount (or 0)
-- `scripts/check-routes.ts` proves honest routes pass and six tampered/mismatched routes are refused.
-- Approvals are for the exact amount, never unlimited (mainnet USDT is reset to 0 first).
-- Refuses trades whose price impact exceeds `max_price_impact_bps` (default 1%), or when Pendle
-  reports none; checks balances before proposing; flags low liquidity, short maturity, new markets,
-  volatile underlyings, suspicious fixed-vs-variable spreads and points that accrue to YT, not PT.
-- Pendle aggregators are used only when a market can't take or return the token natively, which keeps
-  each call cheap against Pendle's per-IP compute-unit limit; 429s return a clear retry message.
-- No API keys or secrets. No state between calls.
+  - exit: `swapExactPtForToken` or `redeemPyToToken`, with the user as receiver and the exact PT amount
+  - roll-over: `callAndReflect`, whose reflector is Pendle's deployed Reflector for that chain (taken from
+    `pendle-core-v2-public/deployments`). Its first self-call must consume exactly the user's old PT
+    (`redeemPyToSy` or `swapExactPtForSy`), its second must be empty, and the reflected call must be
+    `swapExactSyForPt` buying the requested new PT for the user.
+  - the native value must equal the deposit amount (or be 0)
+- **Approvals are for the exact amount, never unlimited.** Mainnet USDT is reset to 0 first.
+- **Risky trades are refused.** A trade is refused when its price impact exceeds `max_price_impact_bps` (default 1%),
+  or when Pendle reports no impact at all. Balances are checked before anything is proposed.
+- **No API keys, secrets or state between calls.**
+
+`scripts/check-routes.ts` proves that six honest routes pass (buy, native buy, sell, redeem, matured roll-over,
+active roll-over) and that six tampered or mismatched routes are refused.
+
+## How it runs inside PayBox
+
+- **One sandbox per call, 10-second budget.** All upstream calls share one 9-second budget (`timeLeft()` in
+  `src/pendle.ts`) instead of fixed per-request timeouts. The hosted sandbox is about 2–3× slower than local, so this
+  keeps slow chains working.
+- **Pendle compute units.** Pendle limits each IP to 200 CU per minute, and every PayBox user shares the sandbox's
+  egress. The plugin uses the market list (`/v2/markets/all`, 2 CU, all chains in one request) and the v3 convert API.
+  It turns on Pendle's aggregator only when the market cannot take the input token, or return the output token,
+  natively (about 5 CU instead of 7). A 429 response returns a clear "try again in N s" message.
+- **Pendle endpoints used:**
+  - `/v2/markets/all`
+  - `/v3/sdk/{chainId}/convert`
+  - `/v1/dashboard/positions/database/{user}`
+  - `/v1/prices/assets`
+  - `/v3/{chainId}/markets/{market}/historical-data`
+  - `/v1/sdk/{chainId}/markets/{market}/swapping-prices`
+- **On-chain reads.** Balances, allowances, decimals and symbols are read in one Multicall3 request per chain (viem).
+
+## Chains
+
+Each chain was verified with a "Validate transaction" simulation in the PayBox developer portal. X Layer (196) is
+not included because PayBox rejects proposals on it.
+
+| Chain | ID | RPC host | Pendle Reflector |
+|---|---|---|---|
+| Ethereum | 1 | `ethereum-rpc.publicnode.com` | `0x30544e00…55DD` |
+| Base | 8453 | `base-rpc.publicnode.com` | `0x30544e00…55DD` |
+| Arbitrum | 42161 | `arbitrum-one-rpc.publicnode.com` | `0x30544e00…55DD` |
+| HyperEVM | 999 | `rpc.hyperliquid.xyz` | `0x30544e00…55DD` |
+| Robinhood Chain | 4663 | `robinhood-rpc.publicnode.com` | `0x73d5DBF8…4fA8` |
+| BNB Chain | 56 | `bsc-rpc.publicnode.com` | `0x30544e00…55DD` |
+| Monad | 143 | `rpc.monad.xyz` | `0x73d5DBF8…4fA8` |
+| Plasma | 9745 | `rpc.plasma.to` | `0x30544e00…55DD` |
 
 ## Portal configuration
 
@@ -64,18 +117,52 @@ rpc.monad.xyz
 rpc.plasma.to
 ```
 
-**Variables & Secrets:** none.
+**Variables & Secrets:** none. Upload `dist/plugin.mjs` only.
 
 ## Build and test
 
-Node.js 24.21.0 and pnpm 11.11.0 on Linux/macOS (WSL2 on Windows).
+Use Node.js 24.21.0 and pnpm 11.11.0 on Linux or macOS (WSL2 on Windows).
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm test                                   # typecheck, deterministic build x2, conformance
-node scripts/qa.mjs                         # 42 live cases: happy paths, invalid input, error paths
-pnpm exec tsx scripts/check-routes.ts       # live router verification incl. roll-over and tampering
-node scripts/smoke.mjs <tool> '<json>'      # call any tool once
+pnpm test                                    # typecheck, deterministic build x2, MCP conformance
+node scripts/qa.mjs [filter]                 # 42 live cases: happy paths, invalid input, error paths
+pnpm exec tsx scripts/check-routes.ts        # 12 live router-verification checks incl. tamper refusal
+pnpm exec tsx scripts/chain-probes.ts        # one approval probe per chain, for portal "Validate transaction"
+pnpm exec tsx scripts/find-sim-wallets.ts base [token]   # real wallets with router allowances, for smoke tests
+node scripts/smoke.mjs <tool> '<json>'       # call any tool once
 ```
 
-Upload `dist/plugin.mjs` only.
+The portal's "Validate transaction" always simulates from your own PayBox wallet. A deposit's second step, an exit
+or a roll-over therefore validates there only once that wallet actually holds the allowance or the PT.
+
+**Latest results:**
+- `pnpm test` passes: 7 tools, 702,544-byte bundle, deterministic sha256 `09cd585e…`.
+- QA passes 42/42 and route checks pass 12/12.
+- Hosted runs in the PayBox sandbox succeed:
+
+  | Tool | Hosted time |
+  |---|---|
+  | find | 3.7 s |
+  | explain | 4.3 s |
+  | quote | 5.2 s |
+  | positions | 7.1 s |
+  | exit | 6.1 s |
+
+## Layout
+
+```
+src/plugin.ts     MCP server and the seven tools
+src/pendle.ts     Pendle API client, markets, prices, on-chain reads, route decoding and verification
+src/paybox.ts     PayBox proposal helpers from the starter kit (unchanged)
+scripts/          conformance (starter), QA, route checks, chain probes, smoke tools
+site/             the static landing page deployed to Vercel (Three.js hero, live Pendle data)
+```
+
+## Limitations
+
+- Limit orders are not supported, because they need typed-data signatures and PayBox proposals are EVM, Solana or x402
+  transactions only. PT looping is not supported, because it is leveraged and outside a fixed-yield product.
+- Hosted latency is 6–8 s for the heaviest calls (cross-chain positions, slow chains), against a 10 s limit. When
+  Pendle or an RPC is slow, the call returns a clear error rather than a partial proposal.
+- The fixed rate is fixed only if the PT is held to maturity. This is not financial advice.
