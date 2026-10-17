@@ -1,0 +1,7 @@
+{
+  "tool": "find_fixed_yields",
+  "arguments": {
+    "asset": "usd",
+    "limit": 3
+  }
+}

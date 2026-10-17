@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendle Fixed Yield</title>
+<meta name="description" content="A PayBox plugin that lets an agent lock a fixed rate on idle crypto via Pendle Principal Tokens: find, explain, quote, deposit, track, exit and roll over, with every route verified before you approve.">
+<style>
+:root{--bg:#f7f7f4;--fg:#16181d;--muted:#5d636f;--card:#fff;--line:#e3e3dd;--accent:#0f7b5f;--warn:#a15c00;--chip:#eef3f0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1114;--fg:#e8e9ec;--muted:#9aa0ab;--card:#171a1f;--line:#2a2e35;--accent:#39c79a;--warn:#e0a24a;--chip:#1d2a25}}
+:root[data-theme="dark"]{--bg:#0f1114;--fg:#e8e9ec;--muted:#9aa0ab;--card:#171a1f;--line:#2a2e35;--accent:#39c79a;--warn:#e0a24a;--chip:#1d2a25}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:40px 16px 64px}
+h1{font-size:clamp(28px,5vw,42px);line-height:1.15;margin:0 0 12px}
+h2{font-size:20px;margin:44px 0 12px}
+p{margin:0 0 12px}
+.lead{font-size:18px;color:var(--muted);max-width:720px}
+a{color:var(--accent)}
+.quote{border-left:3px solid var(--accent);padding:8px 14px;margin:20px 0;background:var(--card);border-radius:0 8px 8px 0}
+.quote small{display:block;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card b{display:block;font-family:ui-monospace,Consolas,monospace;font-size:14px;margin-bottom:4px}
+.card span{color:var(--muted);font-size:14px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;background:var(--chip);color:var(--accent);margin-left:6px;font-family:system-ui}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
+select,label{font:inherit;font-size:14px}
+select{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+.table{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:620px}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.up{color:var(--accent)}.flag{color:var(--warn);font-size:12px}
+#status{color:var(--muted);font-size:13px;margin-top:8px}
+ul{padding-left:20px}li{margin-bottom:6px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:13px;background:var(--chip);padding:1px 5px;border-radius:4px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<h1>Pendle Fixed Yield</h1>
+<p class="lead">A PayBox plugin that lets your agent lock a <strong>fixed rate</strong> on idle stablecoins, ETH, BTC, HYPE or tokenized T-bills by buying Pendle Principal Tokens. It handles the whole lifecycle (find, explain, quote, deposit, track, exit and roll over) and verifies every route before PayBox asks you to approve.</p>
+<p><a href="https://github.com/PugarHuda/pendle-fixed-yield">Source on GitHub</a> · built for the MoonPay PayBox Hackathon</p>
+
+<div class="quote">"Put 25 USDC somewhere it earns a fixed rate until February."
+<small>The agent finds the best market, explains its risks, quotes the rate, then proposes an exact-amount approval and the deposit. At maturity it rolls the PT into the next one in one transaction.</small></div>
+
+<h2>Live fixed rates <span class="tag">from Pendle, right now</span></h2>
+<div class="controls">
+  <label>Chain <select id="chain"><option value="">All PayBox chains</option></select></label>
+  <label>Asset <select id="asset"><option value="">Any</option><option value="usd">Stablecoins</option><option value="eth">ETH</option><option value="btc">BTC</option></select></label>
+  <label><input type="checkbox" id="liq" checked> Liquidity ≥ $250k</label>
+</div>
+<div class="table"><table>
+  <thead><tr><th>Market</th><th>Chain</th><th>Maturity</th><th class="num">Fixed APY</th><th class="num">Variable APY</th><th class="num">Liquidity</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="6">Loading live markets…</td></tr></tbody>
+</table></div>
+<div id="status"></div>
+
+<h2>Tools</h2>
+<div class="grid">
+  <div class="card"><b>find_fixed_yields</b><span>Every active market on 8 chains in one call. Shows fixed vs variable APY, premium, liquidity, TVL and risk flags.</span></div>
+  <div class="card"><b>explain_fixed_yield_market</b><span>Due diligence: Pendle's risk notes and quirks, the 30-day APY trend, the PT discount, points programs, and which tokens it accepts and redeems to.</span></div>
+  <div class="card"><b>quote_fixed_yield</b><span>How much PT you get, the effective APY, USD value now and at maturity, price impact, fee, and balance and approval checks.</span></div>
+  <div class="card"><b>propose_fixed_yield_deposit</b><span>An exact-amount approval, then the verified router deposit.</span></div>
+  <div class="card"><b>get_fixed_yield_positions</b><span>PT holdings across chains, read on-chain and valued in USD, with a suggested roll-over target.</span></div>
+  <div class="card"><b>propose_fixed_yield_exit</b><span>Redeem after maturity, or sell early at the market price.</span></div>
+  <div class="card"><b>propose_fixed_yield_rollover</b><span>Moves an old PT into a later PT of the same asset in one <code>callAndReflect</code> transaction.</span></div>
+</div>
+
+<h2>Why you can trust the proposal</h2>
+<ul>
+  <li><strong>It never signs.</strong> It only returns unsigned <code>io.paybox/transactionProposal</code> calls, and PayBox simulates each one and asks you before signing.</li>
+  <li><strong>Pendle's API is treated as untrusted.</strong> The plugin decodes the calldata itself and only proposes a route that targets Pendle Router V4 <code>0x8888…F946</code>, with you as receiver, the requested market and the exact amount.</li>
+  <li><strong>Roll-overs are checked call by call.</strong> Each nested call must match, and the reflector must be the one in Pendle's official deployments for that chain.</li>
+  <li><strong>Approvals are for the exact amount, never unlimited.</strong> Mainnet USDT is reset to 0 first.</li>
+  <li><strong>Risky trades are refused or flagged.</strong> It refuses trades over the price-impact limit, and flags low liquidity, short maturity, new markets, volatile underlyings, suspicious spreads, and points that go to YT rather than PT.</li>
+</ul>
+
+<h2>Chains</h2>
+<p>Ethereum, Base, Arbitrum, HyperEVM, Robinhood Chain, BNB Chain, Monad and Plasma. Each one was verified with a PayBox portal simulation.</p>
+
+<h2>Build</h2>
+<pre>pnpm install --frozen-lockfile
+pnpm test                               # typecheck, deterministic build, conformance
+node scripts/qa.mjs                     # 42 live cases
+pnpm exec tsx scripts/check-routes.ts   # router verification incl. tamper refusal</pre>
+
+<footer>The fixed rate holds only if you keep the PT to maturity. This page reads public Pendle data and is not financial advice.</footer>
+</main>
+<script>
+const CHAINS = {1:"Ethereum",8453:"Base",42161:"Arbitrum",999:"HyperEVM",4663:"Robinhood",56:"BNB Chain",143:"Monad",9745:"Plasma"};
+const ASSET = { usd:/usd|dai|usx|gho|frax|sgov|usde|usdt|usdc/i, eth:/eth/i, btc:/btc/i };
+const $ = (id) => document.getElementById(id);
+for (const [id, n] of Object.entries(CHAINS)) $("chain").add(new Option(n, id));
+let markets = [];
+const pct = (x) => (x * 100).toFixed(2) + "%";
+const usd = (x) => x >= 1e6 ? "$" + (x / 1e6).toFixed(1) + "M" : "$" + Math.round(x / 1e3) + "k";
+function render() {
+  const chain = $("chain").value, asset = $("asset").value, liq = $("liq").checked;
+  const rows = markets.filter((m) => (!chain || m.chainId == chain) && (!asset || ASSET[asset].test(m.name)) && (!liq || m.liquidity >= 250e3))
+    .sort((a, b) => b.fixed - a.fixed).slice(0, 25);
+  $("rows").innerHTML = rows.length ? rows.map((m) => `<tr><td>${m.name}${m.fixed > m.variable * 3 && m.variable > 0 ? ' <span class="flag">wide spread</span>' : ""}</td><td>${CHAINS[m.chainId]}</td><td>${m.expiry}</td><td class="num up">${pct(m.fixed)}</td><td class="num">${pct(m.variable)}</td><td class="num">${usd(m.liquidity)}</td></tr>`).join("")
+    : '<tr><td colspan="6">No market matches these filters.</td></tr>';
+}
+async function load() {
+  try {
+    for (let skip = 0; ; skip += 100) {
+      const r = await fetch(`https://api-v2.pendle.finance/core/v2/markets/all?isActive=true&limit=100&skip=${skip}`);
+      if (!r.ok) throw new Error(`Pendle API ${r.status}`);
+      const d = await r.json();
+      for (const m of d.results) if (CHAINS[m.chainId] && m.details) markets.push({ name: m.name, chainId: m.chainId, expiry: m.expiry.slice(0, 10), fixed: m.details.impliedApy ?? 0, variable: m.details.underlyingApy ?? 0, liquidity: m.details.liquidity ?? 0 });
+      if (d.results.length < 100) break;
+    }
+    $("status").textContent = `${markets.length} active markets · fetched ${new Date().toLocaleTimeString()} from api-v2.pendle.finance`;
+    render();
+  } catch (e) {
+    $("rows").innerHTML = `<tr><td colspan="6">Could not load live markets (${e.message}). Try again shortly.</td></tr>`;
+  }
+}
+for (const id of ["chain", "asset", "liq"]) $(id).addEventListener("change", render);
+load();
+</script>
+</body>
+</html>
