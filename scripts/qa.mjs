@@ -75,6 +75,18 @@ const cases = [
   ["rollover: different underlying refused", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: USDAI, wallet_address: HOLDER }, true, /different underlying/],
   ["rollover: destination not an active market", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: EMPTY, wallet_address: HOLDER }, true, /not an active Pendle market/],
   ["rollover: same market refused", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: SUSDAI, wallet_address: HOLDER }, true, /must differ/],
+  ["ladder: 4 Ethereum USDC rungs in distinct months, verified quotes", "plan_fixed_yield_ladder",
+    { chain: "ethereum", wallet_address: EMPTY, token_in: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount: "10000", rungs: 4 }, false, /Blended fixed APY/,
+    (r) => { const x = sc(r); const m = x.rungs.map((g) => g.maturity.slice(0, 7)); return x.rungs.length === 4 && new Set(m).size === 4
+      && m.every((v, i) => i === 0 || m[i - 1] < v) && x.rungs.reduce((t, g) => t + Number(g.amount_in), 0) === 10000 && x.blended_fixed_apy_pct > 0 && !x.balance_sufficient; }],
+  ["ladder: odd amount keeps every atomic unit", "plan_fixed_yield_ladder",
+    { chain: "ethereum", wallet_address: EMPTY, token_in: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount: "1000.000001", rungs: 3 }, false, /Ladder of 3/,
+    (r) => Math.round(sc(r).rungs.reduce((t, g) => t + Number(g.amount_in) * 1e6, 0)) === 1000000001],
+  ["ladder: chain without two months points elsewhere", "plan_fixed_yield_ladder",
+    { chain: "plasma", wallet_address: EMPTY, token_in: "native", amount: "1" }, true, /Chains that can ladder usd now: .*ethereum/],
+  ["ladder: unroutable token fails clearly with accepted tokens", "plan_fixed_yield_ladder",
+    { chain: "monad", wallet_address: EMPTY, token_in: "native", amount: "100" }, true, /No rung could be quoted with MON: .*accepts/],
+  ["ladder: rungs 5 rejected", "plan_fixed_yield_ladder", { chain: "ethereum", wallet_address: EMPTY, token_in: "native", amount: "1", rungs: 5 }, true, /validation/i],
   ["rollover: no later maturity available", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, wallet_address: HOLDER }, true, /No active sUSDai market/],
 ];
 

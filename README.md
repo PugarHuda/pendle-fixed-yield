@@ -16,6 +16,10 @@ The plugin never signs anything. Each wallet action is an unsigned proposal that
 > (for example 8.7% fixed, so $25 becomes about $25.8). It then proposes an exact-amount approval,
 > then the deposit, and the PT lands in the wallet. At maturity it rolls the PT into the next maturity
 > in one transaction.
+>
+> "Spread 10,000 USDC so some of it comes back every month."
+>
+> The agent builds a 4-rung ladder from November to February at a blended fixed APY of about 13%.
 
 **Why a PT is a fixed rate.** A Principal Token trades at a discount and redeems for one unit of its accounting
 asset at maturity. Buying it today locks the discount as a fixed APY, provided the PT is held to maturity. Selling
@@ -28,6 +32,7 @@ early happens at the market price.
 | `find_fixed_yields` | read | Every active Pendle market on 8 PayBox chains in one call. Shows fixed vs variable APY, premium, liquidity, TVL, protocol, `value_of_1000_at_maturity` and risk flags. Filters: `chain`, `asset` (usd/eth/btc/hype), `min_liquidity_usd`, `min_days`/`max_days`, `exclude_flagged`. Sorts by `fixed_apy`, `fixed_premium` or `liquidity`. |
 | `explain_fixed_yield_market` | read | Due diligence for one market: Pendle's own asset description, risk notes and quirks, the 30-day fixed and variable APY trend, the live PT price in its underlying, points programs, risk flags, and the accepted and redeem tokens with their symbols. Works for matured markets too. |
 | `quote_fixed_yield` | read | PT received, effective fixed APY, USD value now and at maturity, projected gain, price impact, fee, whether the aggregator is used, and approval and balance checks for the wallet. |
+| `plan_fixed_yield_ladder` | read | Splits one amount evenly across 2â€“4 markets in different maturity months on one chain, like a bond ladder, so the money comes back in stages. Takes the best fixed rate in each upcoming month (skipping markets flagged low liquidity, new or volatile) and quotes every rung through the verified router route. Reports PT out, APY, maturity value and price impact per rung, plus the blended APY. If the chain can't ladder, it names chains that can. |
 | `propose_fixed_yield_deposit` | proposal | If the router needs an approval, returns an exact-amount approval (step 1 of 2). Otherwise returns the verified Pendle router deposit. Checks the balance first and refuses trades whose price impact is too high. |
 | `get_fixed_yield_positions` | read | PT holdings across all chains, valued in USD. Balances are read on-chain, and older or matured markets are found through Pendle's position index. Suggests a roll-over target. Chains whose RPC fails are listed in `chains_unavailable`, not silently skipped. |
 | `propose_fixed_yield_exit` | proposal | Redeems after maturity (`redeemPyToToken`) or sells early at the market price (`swapExactPtForToken`) into a token of the user's choice. Requests a PT approval first if needed. |
@@ -70,7 +75,7 @@ active roll-over) and that six tampered or mismatched routes are refused.
 ## How it runs inside PayBox
 
 - **One sandbox per call, 10-second budget.** All upstream calls share one 9-second budget (`timeLeft()` in
-  `src/pendle.ts`) instead of fixed per-request timeouts. The hosted sandbox is about 2–3× slower than local, so this
+  `src/pendle.ts`) instead of fixed per-request timeouts. The hosted sandbox is about 2â€“3Ã— slower than local, so this
   keeps slow chains working.
 - **Pendle compute units.** Pendle limits each IP to 200 CU per minute, and every PayBox user shares the sandbox's
   egress. The plugin uses the market list (`/v2/markets/all`, 2 CU, all chains in one request) and the v3 convert API.
@@ -92,18 +97,18 @@ not included because PayBox rejects proposals on it.
 
 | Chain | ID | RPC host | Pendle Reflector |
 |---|---|---|---|
-| Ethereum | 1 | `ethereum-rpc.publicnode.com` | `0x30544e00…55DD` |
-| Base | 8453 | `base-rpc.publicnode.com` | `0x30544e00…55DD` |
-| Arbitrum | 42161 | `arbitrum-one-rpc.publicnode.com` | `0x30544e00…55DD` |
-| HyperEVM | 999 | `rpc.hyperliquid.xyz` | `0x30544e00…55DD` |
-| Robinhood Chain | 4663 | `robinhood-rpc.publicnode.com` | `0x73d5DBF8…4fA8` |
-| BNB Chain | 56 | `bsc-rpc.publicnode.com` | `0x30544e00…55DD` |
-| Monad | 143 | `rpc.monad.xyz` | `0x73d5DBF8…4fA8` |
-| Plasma | 9745 | `rpc.plasma.to` | `0x30544e00…55DD` |
+| Ethereum | 1 | `ethereum-rpc.publicnode.com` | `0x30544e00â€¦55DD` |
+| Base | 8453 | `base-rpc.publicnode.com` | `0x30544e00â€¦55DD` |
+| Arbitrum | 42161 | `arbitrum-one-rpc.publicnode.com` | `0x30544e00â€¦55DD` |
+| HyperEVM | 999 | `rpc.hyperliquid.xyz` | `0x30544e00â€¦55DD` |
+| Robinhood Chain | 4663 | `robinhood-rpc.publicnode.com` | `0x73d5DBF8â€¦4fA8` |
+| BNB Chain | 56 | `bsc-rpc.publicnode.com` | `0x30544e00â€¦55DD` |
+| Monad | 143 | `rpc.monad.xyz` | `0x73d5DBF8â€¦4fA8` |
+| Plasma | 9745 | `rpc.plasma.to` | `0x30544e00â€¦55DD` |
 
 ## Portal configuration
 
-**Network hosts** (Test & configure → Network access):
+**Network hosts** (Test & configure â†’ Network access):
 
 ```
 api-v2.pendle.finance
@@ -126,7 +131,7 @@ Use Node.js 24.21.0 and pnpm 11.11.0 on Linux or macOS (WSL2 on Windows).
 ```bash
 pnpm install --frozen-lockfile
 pnpm test                                    # typecheck, deterministic build x2, MCP conformance
-node scripts/qa.mjs [filter]                 # 42 live cases: happy paths, invalid input, error paths
+node scripts/qa.mjs [filter]                 # 47 live cases: happy paths, invalid input, error paths
 pnpm exec tsx scripts/check-routes.ts        # 12 live router-verification checks incl. tamper refusal
 pnpm exec tsx scripts/chain-probes.ts        # one approval probe per chain, for portal "Validate transaction"
 pnpm exec tsx scripts/find-sim-wallets.ts base [token]   # real wallets with router allowances, for smoke tests
@@ -137,22 +142,23 @@ The portal's "Validate transaction" always simulates from your own PayBox wallet
 or a roll-over therefore validates there only once that wallet actually holds the allowance or the PT.
 
 **Latest results:**
-- `pnpm test` passes: 7 tools, 702,544-byte bundle, deterministic sha256 `09cd585e…`.
-- QA passes 42/42 and route checks pass 12/12.
+- `pnpm test` passes: 8 tools and a deterministic bundle.
+- QA passes 47/47 and route checks pass 12/12.
 - Hosted runs in the PayBox sandbox succeed:
 
   | Tool | Hosted time |
   |---|---|
   | find | 3.7 s |
   | explain | 4.3 s |
-  | quote | 5.2 s |
+  | quote | 5.3 s |
+  | ladder (4 rungs) | 5.9 s |
   | positions | 7.1 s |
   | exit | 6.1 s |
 
 ## Layout
 
 ```
-src/plugin.ts     MCP server and the seven tools
+src/plugin.ts     MCP server and the eight tools
 src/pendle.ts     Pendle API client, markets, prices, on-chain reads, route decoding and verification
 src/paybox.ts     PayBox proposal helpers from the starter kit (unchanged)
 scripts/          conformance (starter), QA, route checks, chain probes, smoke tools
@@ -163,6 +169,6 @@ site/             the static landing page deployed to Vercel (Three.js hero, liv
 
 - Limit orders are not supported, because they need typed-data signatures and PayBox proposals are EVM, Solana or x402
   transactions only. PT looping is not supported, because it is leveraged and outside a fixed-yield product.
-- Hosted latency is 6–8 s for the heaviest calls (cross-chain positions, slow chains), against a 10 s limit. When
+- Hosted latency is 6â€“8 s for the heaviest calls (cross-chain positions, slow chains), against a 10 s limit. When
   Pendle or an RPC is slow, the call returns a clear error rather than a partial proposal.
 - The fixed rate is fixed only if the PT is held to maturity. This is not financial advice.

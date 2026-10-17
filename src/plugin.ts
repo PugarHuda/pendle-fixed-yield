@@ -88,7 +88,7 @@ const riskFlagList = z.array(z.string()).describe("low_liquidity, short_maturity
 
 function createServer() {
   const server = new McpServer(
-    { name: "pendle-fixed-yield", version: "2.0.0" },
+    { name: "pendle-fixed-yield", version: "2.1.0" },
     { supportedProtocolVersions: [PROTOCOL_VERSION] },
   );
 
@@ -266,6 +266,117 @@ function createServer() {
         + `${out.fixed_apy_pct}% fixed until ${out.maturity}. Each PT redeems for one unit of the market's accounting asset at maturity. ${notes}`.trim() }],
       structuredContent: out,
     };
+  }));
+
+  const ladderRung = z.object({
+    market: z.string(), name: z.string(), protocol: z.string(), maturity: z.string(), days_to_maturity: z.number(),
+    amount_in: z.string(), pt_out: z.string().nullable(), fixed_apy_pct: z.number().nullable(), value_at_maturity_usd: z.number().nullable(),
+    price_impact_pct: z.number().nullable(), risk_flags: riskFlagList, issue: z.string().nullable(),
+  }).strict();
+
+  server.registerTool("plan_fixed_yield_ladder", {
+    title: "Plan a Pendle fixed-yield ladder",
+    description: "Read-only plan that splits one amount evenly across 2 to 4 Pendle markets with different maturity months on one chain, "
+      + "like a bond ladder: money comes back in stages, and each rung can be rolled or withdrawn as it matures. "
+      + "Picks the best fixed rate in each upcoming month, quotes every rung with a verified router route, and reports the blended APY. "
+      + "Moves no funds. Next: propose_fixed_yield_deposit for each rung with its market and amount_in.",
+    inputSchema: z.object({
+      chain, wallet_address: wallet,
+      token_in: token.describe("Token to deposit: 'native' or an ERC-20 address on that chain, e.g. USDC."),
+      amount: decimalAmount.describe("Total human amount of token_in to spread across the rungs."),
+      rungs: z.number().int().min(2).max(4).default(3),
+      asset: z.enum(["any", "usd", "eth", "btc", "hype"]).default("usd").describe("Which kind of market to ladder into."),
+      min_liquidity_usd: z.number().min(0).max(1e10).default(250_000),
+      min_days: z.number().int().min(1).max(3650).default(14),
+      slippage_bps: slippage, max_price_impact_bps: maxImpact,
+    }).strict(),
+    outputSchema: z.object({
+      chain, token_in_symbol: z.string(), amount_in: z.string(), amount_in_usd: z.number().nullable(),
+      rungs: z.array(ladderRung), blended_fixed_apy_pct: z.number().nullable(), value_at_maturity_usd: z.number().nullable(),
+      needs_approval: z.boolean(), balance_sufficient: z.boolean(),
+    }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, (args) => guarded(async () => {
+    const owner = getAddress(args.wallet_address);
+    const severe = new Set(["low_liquidity", "new_market", "volatile_underlying"]);
+    // Best fixed rate per chain and maturity month; this chain's earliest months become the rungs.
+    const months = new Map<ChainKey, Map<string, Market>>();
+    for (const m of await activeMarkets()) {
+      if (m.fixedApy <= 0 || m.liquidityUsd < args.min_liquidity_usd || daysLeft(m.expiry) < args.min_days) continue;
+      if ((args.asset !== "any" && m.asset !== args.asset) || riskFlags(m).some((f) => severe.has(f))) continue;
+      const byMonth = months.get(m.chain) ?? months.set(m.chain, new Map()).get(m.chain)!;
+      const month = m.expiry.slice(0, 7);
+      if ((byMonth.get(month)?.fixedApy ?? -1) < m.fixedApy) byMonth.set(month, m);
+    }
+    const picked = [...(months.get(args.chain) ?? new Map<string, Market>()).entries()]
+      .sort(([a], [b]) => a.localeCompare(b)).slice(0, args.rungs).map(([, m]) => m);
+    if (picked.length < 2) {
+      const elsewhere = [...months].filter(([, byMonth]) => byMonth.size >= 2).map(([c, byMonth]) => `${c} (${byMonth.size} months)`);
+      throw new UserError(`Only ${picked.length} ${args.asset} maturity month${picked.length === 1 ? "" : "s"} on ${args.chain} pass these filters; a ladder needs at least two. `
+        + (elsewhere.length ? `Chains that can ladder ${args.asset} now: ${elsewhere.join(", ")}.` : "Try asset 'any' or a lower min_liquidity_usd."));
+    }
+
+    const state = await tokenState(args.chain, args.token_in === "native" ? "native" : getAddress(args.token_in), owner);
+    const total = parseAmount(args.amount, state.decimals);
+    const share = total / BigInt(picked.length);
+    if (share === 0n) throw new UserError("Amount is too small to split across the rungs.");
+    const amounts = picked.map((_, i) => (i === picked.length - 1 ? total - share * BigInt(picked.length - 1) : share));
+    const tokenInAddress = state.native ? NATIVE : state.token;
+
+    const [routes, priced, ptDecimals] = await Promise.all([
+      Promise.allSettled(picked.map((m, i) => convert(args.chain, { kind: "buy", market: m }, {
+        receiver: owner, tokenIn: tokenInAddress, amountIn: amounts[i]!, tokenOut: m.pt, slippageBps: args.slippage_bps, nativeValue: state.native,
+      }))),
+      prices(args.chain, [tokenInAddress, ...picked.map((m) => m.accounting)]).catch(() => new Map<Address, number>()),
+      Promise.all(picked.map((m) => tokenState(args.chain, m.pt, owner).then((s) => s.decimals))),
+    ]);
+
+    if (routes.every((r) => r.status === "rejected")) {
+      const first = (routes[0] as PromiseRejectedResult).reason;
+      if (!(first instanceof UserError)) throw first;
+      const names = await symbols(args.chain, picked[0]!.inputTokens);
+      throw new UserError(`No rung could be quoted with ${state.symbol}: ${first.message} `
+        + `PT-${picked[0]!.name} accepts ${picked[0]!.inputTokens.map((t) => `${names.get(t)} (${t})`).join(", ") || "its underlying asset"}.`);
+    }
+    let valueSum = 0, weighted = 0, weight = 0, pricedAll = true;
+    const rungs = picked.map((m, i) => {
+      const r = routes[i]!;
+      const amountIn = formatUnits(amounts[i]!, state.decimals);
+      const base = { market: m.address, name: m.name, protocol: m.protocol, maturity: day(m.expiry), days_to_maturity: Math.floor(daysLeft(m.expiry)), amount_in: amountIn, risk_flags: riskFlags(m) };
+      if (r.status === "rejected") {
+        pricedAll = false;
+        return { ...base, pt_out: null, fixed_apy_pct: null, value_at_maturity_usd: null, price_impact_pct: null,
+          issue: r.reason instanceof UserError ? r.reason.message : "Pendle could not quote this rung." };
+      }
+      const route = r.value;
+      const ptOut = Number(formatUnits(route.amountOut, ptDecimals[i]!));
+      const apy = route.effectiveApy ?? m.fixedApy;
+      const accPrice = priced.get(m.accounting) ?? null;
+      const value = accPrice === null ? null : ptOut * accPrice;
+      if (value === null) pricedAll = false; else valueSum += value;
+      weighted += apy * Number(amountIn); weight += Number(amountIn);
+      const impact = route.priceImpact === null ? null : Math.abs(route.priceImpact) * 10_000;
+      const issue = impact === null ? "Pendle reported no price impact; the deposit tool will refuse this route until it does."
+        : impact > args.max_price_impact_bps ? `Price impact ${round(impact / 100, 3)}% is above the ${args.max_price_impact_bps / 100}% limit.` : null;
+      return { ...base, pt_out: formatUnits(route.amountOut, ptDecimals[i]!), fixed_apy_pct: pct(apy), value_at_maturity_usd: usd(value),
+        price_impact_pct: route.priceImpact === null ? null : round(route.priceImpact * 100, 3), issue };
+    });
+
+    const inPrice = priced.get(tokenInAddress) ?? null;
+    const out = {
+      chain: args.chain, token_in_symbol: state.symbol, amount_in: args.amount, amount_in_usd: inPrice === null ? null : round(Number(args.amount) * inPrice),
+      rungs, blended_fixed_apy_pct: weight ? pct(weighted / weight) : null, value_at_maturity_usd: pricedAll ? round(valueSum) : null,
+      needs_approval: !state.native && state.allowance < total, balance_sufficient: state.balance >= total,
+    };
+    const lines = rungs.map((r, i) => `${i + 1}. ${r.amount_in} ${state.symbol} → PT-${r.name} (${r.protocol}), ${r.fixed_apy_pct === null ? "no quote" : `${r.fixed_apy_pct}% fixed`} until ${r.maturity}`
+      + `${r.value_at_maturity_usd !== null ? ` ≈ $${r.value_at_maturity_usd}` : ""}${r.issue ? ` [${r.issue}]` : ""}`);
+    const notes = [
+      out.blended_fixed_apy_pct !== null ? `Blended fixed APY ${out.blended_fixed_apy_pct}%.` : null,
+      out.balance_sufficient ? null : `Wallet holds only ${formatUnits(state.balance, state.decimals)} ${state.symbol}.`,
+      out.needs_approval ? "Each rung's deposit asks for its own exact-amount approval first." : null,
+      "To execute, call propose_fixed_yield_deposit once per rung with its market and amount_in.",
+    ].filter(Boolean).join(" ");
+    return { content: [{ type: "text" as const, text: `Ladder of ${rungs.length} on ${args.chain}:\n${lines.join("\n")}\n${notes}` }], structuredContent: out };
   }));
 
   server.registerTool("propose_fixed_yield_deposit", {
