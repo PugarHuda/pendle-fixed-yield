@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 import { atomicAmount, evmOutputSchema, proposeEvm } from "./paybox.js";
 import {
   activeMarkets, CHAIN_KEYS, CHAINS, convert, daysLeft, elapsed, findMarket, history, indexedMarkets, marketsById, maturityMultiplier,
-  NATIVE, prices, ptBalances, ptRate, riskFlags, ROUTER, symbols, tokenState, UserError, type ChainKey, type Market,
+  NATIVE, prices, ptBalances, ptBuyDepth, ptRate, riskFlags, ROUTER, symbols, tokenState, UserError, type ChainKey, type Market,
 } from "./pendle.js";
 
 const PROTOCOL_VERSION = "2026-07-28";
@@ -147,13 +147,15 @@ function createServer() {
   server.registerTool("explain_fixed_yield_market", {
     title: "Explain a Pendle fixed-yield market",
     description: "Due-diligence brief for one Pendle market before locking funds: what the asset is, Pendle's own risk notes and quirks, "
-      + "30-day trend of the fixed and variable APY, the PT's current discount, liquidity, points programs, risk flags, and which tokens it accepts and redeems to.",
+      + "30-day trend of the fixed and variable APY, the PT's current discount, order-book depth (how much PT can be bought before the rate drops), liquidity, points programs, risk flags, and which tokens it accepts and redeems to.",
     inputSchema: z.object({ chain, market: marketAddress }).strict(),
     outputSchema: z.object({
       chain, market: z.string(), name: z.string(), protocol: z.string(), active: z.boolean(), maturity: z.string(), days_to_maturity: z.number(),
       fixed_apy_pct: z.number(), variable_apy_pct: z.number(), fixed_premium_pct: z.number(),
       apy_30d: z.object({ days: z.number(), fixed_min_pct: z.number(), fixed_max_pct: z.number(), fixed_change_pct: z.number(), variable_avg_pct: z.number() }).strict().nullable(),
       pt_price_in_underlying: z.number().nullable(), liquidity_usd: z.number(), tvl_usd: z.number(),
+      pt_buy_depth: z.array(z.object({ fixed_apy_pct: z.number(), pt_available: z.number(), usd: z.number().nullable() }).strict())
+        .describe("Cumulative PT buyable (limit orders + AMM) before the fixed rate falls to each level; size deposits within it."),
       points: z.array(z.string()), risk_flags: riskFlagList, accepts: z.array(tokenRef), redeems_to: z.array(tokenRef),
       description: z.string(), risk: z.string(), quirks: z.string(),
     }).strict(),
@@ -161,11 +163,18 @@ function createServer() {
   }, (args) => guarded(async () => {
     const m = await findMarket(args.chain, args.market);
     const tokens = [...new Set([...m.inputTokens, ...m.outputTokens])];
-    const [hist, rate, names] = await Promise.all([
+    const [hist, rate, names, depth, ptMeta, ptPrice] = await Promise.all([
       history(m, 30).catch(() => []),
       m.active ? ptRate(m).catch(() => null) : Promise.resolve(null),
       symbols(m.chain, tokens),
+      m.active ? ptBuyDepth(m).catch(() => []) : Promise.resolve([]),
+      m.active ? tokenState(m.chain, m.pt, ROUTER).catch(() => null) : Promise.resolve(null),
+      m.active ? prices(m.chain, [m.pt]).then((p) => p.get(m.pt) ?? null).catch(() => null) : Promise.resolve(null),
     ]);
+    const buyDepth = ptMeta ? depth.map((d) => {
+      const pt = Number(formatUnits(d.pt, ptMeta.decimals));
+      return { fixed_apy_pct: pct(d.apy), pt_available: round(pt), usd: ptPrice === null ? null : Math.round(pt * ptPrice) };
+    }) : [];
     const fixed = hist.map((h) => h.impliedApy);
     const apy30 = hist.length >= 2 ? {
       days: hist.length,
@@ -177,7 +186,7 @@ function createServer() {
     const out = {
       chain: m.chain, market: m.address, name: m.name, protocol: m.protocol, active: m.active, maturity: day(m.expiry), days_to_maturity: Math.floor(daysLeft(m.expiry)),
       fixed_apy_pct: pct(m.fixedApy), variable_apy_pct: pct(m.underlyingApy), fixed_premium_pct: pct(m.fixedApy - m.underlyingApy),
-      apy_30d: apy30, pt_price_in_underlying: rate ? round(rate.ptToUnderlying, 6) : null,
+      apy_30d: apy30, pt_price_in_underlying: rate ? round(rate.ptToUnderlying, 6) : null, pt_buy_depth: buyDepth,
       liquidity_usd: Math.round(m.liquidityUsd), tvl_usd: Math.round(m.tvlUsd), points: m.points, risk_flags: riskFlags(m),
       accepts: ref(m.inputTokens), redeems_to: ref(m.outputTokens),
       description: m.info.description, risk: m.info.risk, quirks: m.info.quirks,
@@ -186,6 +195,7 @@ function createServer() {
       `${m.name} by ${m.protocol} on ${m.chain}: ${out.fixed_apy_pct}% fixed (variable now ${out.variable_apy_pct}%), matures ${out.maturity}.`,
       apy30 ? `30d fixed APY range ${apy30.fixed_min_pct}–${apy30.fixed_max_pct}% (${apy30.fixed_change_pct >= 0 ? "+" : ""}${apy30.fixed_change_pct} pts), variable avg ${apy30.variable_avg_pct}%.` : "",
       rate ? `1 PT trades at ${out.pt_price_in_underlying} underlying today and redeems for 1 at maturity.` : "",
+      buyDepth.length >= 2 ? `Depth: ${buyDepth.slice(1, 4).map((d) => `${d.usd !== null ? `$${d.usd.toLocaleString("en-US")}` : `${d.pt_available} PT`} before the rate falls to ${d.fixed_apy_pct}%`).join("; ")}.` : "",
       `Accepts: ${out.accepts.map((t) => t.symbol).join(", ") || "n/a"}. Risk flags: ${out.risk_flags.join(", ") || "none"}.`,
       out.risk ? `Pendle risk note: ${out.risk}` : "",
     ].filter(Boolean).join("\n");

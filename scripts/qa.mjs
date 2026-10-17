@@ -75,6 +75,8 @@ const cases = [
   ["rollover: different underlying refused", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: USDAI, wallet_address: HOLDER }, true, /different underlying/],
   ["rollover: destination not an active market", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: EMPTY, wallet_address: HOLDER }, true, /not an active Pendle market/],
   ["rollover: same market refused", "propose_fixed_yield_rollover", { chain: "arbitrum", from_market: SUSDAI, to_market: SUSDAI, wallet_address: HOLDER }, true, /must differ/],
+  ["explain: order-book depth is cumulative and walks the rate down", "explain_fixed_yield_market", { chain: "arbitrum", market: SUSDAI }, false, /Depth: \$/,
+    (r) => { const d = sc(r).pt_buy_depth; return d.length >= 3 && d.every((x, i) => i === 0 || (x.pt_available >= d[i - 1].pt_available && x.fixed_apy_pct <= d[i - 1].fixed_apy_pct)); }],
   ["ladder: 4 Ethereum USDC rungs in distinct months, verified quotes", "plan_fixed_yield_ladder",
     { chain: "ethereum", wallet_address: EMPTY, token_in: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount: "10000", rungs: 4 }, false, /Blended fixed APY/,
     (r) => { const x = sc(r); const m = x.rungs.map((g) => g.maturity.slice(0, 7)); return x.rungs.length === 4 && new Set(m).size === 4

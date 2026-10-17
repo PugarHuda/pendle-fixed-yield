@@ -31,7 +31,7 @@ early happens at the market price.
 | Tool | Kind | What it does |
 |---|---|---|
 | `find_fixed_yields` | read | Every active Pendle market on 8 PayBox chains in one call. Shows fixed vs variable APY, premium, liquidity, TVL, protocol, `value_of_1000_at_maturity` and risk flags. Filters: `chain`, `asset` (usd/eth/btc/hype), `min_liquidity_usd`, `min_days`/`max_days`, `exclude_flagged`. Sorts by `fixed_apy`, `fixed_premium` or `liquidity`. |
-| `explain_fixed_yield_market` | read | Due diligence for one market: Pendle's own asset description, risk notes and quirks, the 30-day fixed and variable APY trend, the live PT price in its underlying, points programs, risk flags, and the accepted and redeem tokens with their symbols. Works for matured markets too. |
+| `explain_fixed_yield_market` | read | Due diligence for one market: Pendle's own asset description, risk notes and quirks, the 30-day fixed and variable APY trend, the live PT price in its underlying, order-book depth (how much PT can be bought, from limit orders plus AMM, before the fixed rate falls to each 0.1% level), points programs, risk flags, and the accepted and redeem tokens with their symbols. Works for matured markets too. |
 | `quote_fixed_yield` | read | PT received, effective fixed APY, USD value now and at maturity, projected gain, price impact, fee, whether the aggregator is used, and approval and balance checks for the wallet. |
 | `plan_fixed_yield_ladder` | read | Splits one amount evenly across 2â€“4 markets in different maturity months on one chain, like a bond ladder, so the money comes back in stages. Takes the best fixed rate in each upcoming month (skipping markets flagged low liquidity, new or volatile) and quotes every rung through the verified router route. Reports PT out, APY, maturity value and price impact per rung, plus the blended APY. If the chain can't ladder, it names chains that can. |
 | `propose_fixed_yield_deposit` | proposal | If the router needs an approval, returns an exact-amount approval (step 1 of 2). Otherwise returns the verified Pendle router deposit. Checks the balance first and refuses trades whose price impact is too high. |
@@ -89,6 +89,7 @@ active roll-over) and that six tampered or mismatched routes are refused.
   - `/v1/prices/assets`
   - `/v3/{chainId}/markets/{market}/historical-data`
   - `/v1/sdk/{chainId}/markets/{market}/swapping-prices`
+  - `/v2/limit-orders/book/{chainId}` (consolidated limit-order and AMM depth)
 - **On-chain reads.** Balances, allowances, decimals and symbols are read in one Multicall3 request per chain (viem).
 
 ## Chains
@@ -132,7 +133,7 @@ Use Node.js 24.21.0 and pnpm 11.11.0 on Linux or macOS (WSL2 on Windows).
 ```bash
 pnpm install --frozen-lockfile
 pnpm test                                    # typecheck, deterministic build x2, MCP conformance
-node scripts/qa.mjs [filter]                 # 47 live cases: happy paths, invalid input, error paths
+node scripts/qa.mjs [filter]                 # 48 live cases: happy paths, invalid input, error paths
 pnpm exec tsx scripts/check-routes.ts        # 12 live router-verification checks incl. tamper refusal
 pnpm exec tsx scripts/chain-probes.ts        # one approval probe per chain, for portal "Validate transaction"
 pnpm exec tsx scripts/find-sim-wallets.ts base [token]   # real wallets with router allowances, for smoke tests
@@ -144,7 +145,7 @@ or a roll-over therefore validates there only once that wallet actually holds th
 
 **Latest results:**
 - `pnpm test` passes: 8 tools and a deterministic bundle.
-- QA passes 47/47 and route checks pass 12/12.
+- QA passes 48/48 and route checks pass 12/12.
 - A real deposit from the developer's PayBox wallet (0.002 native ETH into PT-sUSDai on Arbitrum, no approval needed)
   passes the portal's "Validate transaction" simulation, as does an exact-amount USDC approval on Base.
 - Hosted runs in the PayBox sandbox succeed:

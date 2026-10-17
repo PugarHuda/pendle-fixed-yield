@@ -225,6 +225,21 @@ export async function ptRate(m: Market): Promise<{ ptToUnderlying: number; under
   return Number.isFinite(rate) && r?.underlyingToken ? { ptToUnderlying: rate, underlying: getAddress(r.underlyingToken) } : null;
 }
 
+/**
+ * How much PT a buyer can take before the fixed rate falls to each level, from Pendle's consolidated book
+ * (limit orders + AMM depth). A PT buy fills long-yield orders, which are listed from the current APY downward.
+ * Sizes are cumulative PT in atomic units.
+ */
+export async function ptBuyDepth(m: Market, levels = 6): Promise<{ apy: number; pt: bigint }[]> {
+  const book = await request<{ longYieldEntries?: { impliedApy: number; limitOrderSize: string; ammSize: string }[] }>(
+    `/v2/limit-orders/book/${CHAINS[m.chain].id}?market=${m.address}&limit=${levels}&precisionDecimal=1&includeAmm=true`);
+  let total = 0n;
+  return (book.longYieldEntries ?? []).filter((e) => Number.isFinite(e.impliedApy)).map((e) => {
+    total += BigInt(e.limitOrderSize || "0") + BigInt(e.ammSize || "0");
+    return { apy: e.impliedApy, pt: total };
+  });
+}
+
 export interface PendlePosition { chain: ChainKey; market: Address }
 
 /** Markets Pendle has indexed for this wallet across all chains (cached by Pendle up to ~24h); used to discover
