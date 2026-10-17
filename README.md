@@ -144,6 +144,8 @@ or a roll-over therefore validates there only once that wallet actually holds th
 **Latest results:**
 - `pnpm test` passes: 8 tools and a deterministic bundle.
 - QA passes 47/47 and route checks pass 12/12.
+- A real deposit from the developer's PayBox wallet (0.002 native ETH into PT-sUSDai on Arbitrum, no approval needed)
+  passes the portal's "Validate transaction" simulation, as does an exact-amount USDC approval on Base.
 - Hosted runs in the PayBox sandbox succeed:
 
   | Tool | Hosted time |
