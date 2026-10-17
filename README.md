@@ -142,7 +142,7 @@ Use Node.js 24.21.0 and pnpm 11.11.0 on Linux or macOS (WSL2 on Windows).
 ```bash
 pnpm install --frozen-lockfile
 pnpm test                                    # typecheck, deterministic build x2, MCP conformance
-node scripts/qa.mjs [filter]                 # 48 live cases: happy paths, invalid input, error paths
+node scripts/qa.mjs [filter]                 # 49 live cases: happy paths, invalid input, error paths
 pnpm exec tsx scripts/check-routes.ts        # 12 live router-verification checks incl. tamper refusal
 node scripts/check-limit.mjs                 # 9 live limit-order checks; place and cancel are eth_call-simulated from a real maker
 pnpm exec tsx scripts/chain-probes.ts        # one approval probe per chain, for portal "Validate transaction"
@@ -155,7 +155,7 @@ or a roll-over therefore validates there only once that wallet actually holds th
 
 **Latest results:**
 - `pnpm test` passes: 11 tools and a deterministic bundle.
-- QA passes 48/48, route checks pass 12/12, and limit-order checks pass 9/9.
+- QA passes 49/49, route checks pass 12/12, and limit-order checks pass 9/9.
 - The on-chain `hashOrder` of Pendle's order data matches Pendle's order id, and `preSignSingle` and `cancelSingle`
   proposals both simulate without revert from a real maker.
 - A real deposit from the developer's PayBox wallet (0.002 native ETH into PT-sUSDai on Arbitrum, no approval needed)
