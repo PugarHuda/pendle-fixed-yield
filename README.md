@@ -6,6 +6,7 @@ positions, exit them, and roll them into the next maturity when they expire. Eve
 after the user's PayBox approval.
 
 Live page with current Pendle fixed rates: https://pendle-fixed-yield.vercel.app (source in `site/`).
+Repository: https://github.com/PugarHuda/pendle-fixed-yield
 
 > "Put 25 USDC somewhere it earns a fixed rate until February."
 > → finds the best Pendle market → explains its risks → quotes 8.7% fixed (≈ $25 → $25.8) →
