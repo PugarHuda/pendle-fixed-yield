@@ -145,7 +145,7 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
     <p class="eyebrow">How it works</p>
     <p class="quote">“Put 25 USDC somewhere it earns a fixed rate until February.”</p>
     <p class="lead">The agent finds the best market, explains its risks, quotes the rate, then proposes an exact-amount approval and the deposit. At maturity the PT redeems back to you, like the coin coming down the steps above, or rolls into the next maturity in one transaction.</p>
-    <div class="flow"><span class="on">Find</span><span class="on">Explain</span><span class="on">Quote or ladder</span><span>Approve exact amount</span><span>Deposit</span><span>Track</span><span>Exit or roll over</span></div>
+    <div class="flow"><span class="on">Find</span><span class="on">Explain</span><span class="on">Quote or ladder</span><span>Approve exact amount</span><span>Deposit or limit order</span><span>Track</span><span>Exit or roll over</span></div>
   </section>
 
   <section class="block reveal" id="rates">
@@ -184,9 +184,9 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
   </section>
 
   <section class="block reveal" id="tools">
-    <p class="eyebrow">Eight tools</p>
+    <p class="eyebrow">Eleven tools</p>
     <h2>The whole fixed-yield lifecycle</h2>
-    <p class="lead">Five tools read and three return proposals. A proposal is never signed by the plugin.</p>
+    <p class="lead">Six tools read and five return proposals. A proposal is never signed by the plugin.</p>
     <div class="grid">
       <div class="card"><em>Read</em><b>find_fixed_yields</b><span>Every active market on 8 chains in one call. Shows fixed vs variable APY, premium, liquidity, TVL and risk flags.</span></div>
       <div class="card"><em>Read</em><b>explain_fixed_yield_market</b><span>Due diligence: Pendle's risk notes and quirks, the 30-day APY trend, the PT discount, points programs, and which tokens it accepts and redeems to.</span></div>
@@ -195,6 +195,9 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
       <div class="card"><em>Proposal</em><b>propose_fixed_yield_deposit</b><span>An exact-amount approval, then the verified router deposit.</span></div>
       <div class="card"><em>Read</em><b>get_fixed_yield_positions</b><span>PT holdings across chains, read on-chain and valued in USD, with a suggested roll-over target.</span></div>
       <div class="card"><em>Proposal</em><b>propose_fixed_yield_exit</b><span>Redeem after maturity, or sell early at the market price.</span></div>
+      <div class="card"><em>Proposal</em><b>propose_fixed_yield_limit_order</b><span>An on-chain limit order (<code>preSignSingle</code>) that buys PT only once the fixed rate reaches your target.</span></div>
+      <div class="card"><em>Read</em><b>get_fixed_yield_limit_orders</b><span>Your live limit orders on every chain, with target rate, filled amount and expiry.</span></div>
+      <div class="card"><em>Proposal</em><b>propose_cancel_fixed_yield_limit_order</b><span>Cancels one order, after re-hashing it on-chain to prove it is the one you named.</span></div>
       <div class="card"><em>Proposal</em><b>propose_fixed_yield_rollover</b><span>Moves an old PT into a later PT of the same asset in one <code>callAndReflect</code> transaction.</span></div>
     </div>
   </section>
@@ -206,6 +209,7 @@ footer{margin:80px 0 0;padding:28px 0 40px;border-top:1px solid var(--line);colo
       <li><strong>It never signs.</strong> It only returns unsigned <code>io.paybox/transactionProposal</code> calls, and PayBox simulates each one and asks you before signing.</li>
       <li><strong>Pendle's API is treated as untrusted.</strong> The plugin decodes the calldata itself and only proposes a route that targets Pendle Router V4 <code>0x8888…F946</code>, with you as receiver, the requested market and the exact amount.</li>
       <li><strong>Roll-overs are checked call by call.</strong> Each nested call must match, and the reflector must be the one in Pendle's official deployments for that chain.</li>
+      <li><strong>Limit orders are rebuilt and re-hashed.</strong> Every field of Pendle's generated order must match your request (rate within 1e-9, expiry before maturity, empty permit), and the order is hashed on-chain by Pendle's Limit Router before it is proposed.</li>
       <li><strong>Approvals are for the exact amount, never unlimited.</strong> Mainnet USDT is reset to 0 first.</li>
       <li><strong>Risky trades are refused or flagged.</strong> It refuses trades over the price-impact limit, and flags low liquidity, short maturity, new markets, volatile underlyings, suspicious spreads, and points that go to YT rather than PT.</li>
     </ul>

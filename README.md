@@ -2,7 +2,8 @@
 
 Lets a PayBox-connected agent lock in a **fixed rate** on idle stablecoins, ETH, BTC, HYPE or tokenized assets by
 buying [Pendle](https://pendle.finance) Principal Tokens. It then handles the rest of the lifecycle: due diligence,
-quoting, depositing, tracking the positions, exiting them, and rolling them into the next maturity when they expire.
+quoting, depositing, laddering, tracking the positions, exiting them, rolling them into the next maturity when they
+expire, and placing on-chain limit orders that buy only if the fixed rate reaches a target.
 The plugin never signs anything. Each wallet action is an unsigned proposal that PayBox simulates and the user approves.
 
 - **Live page:** https://pendle-fixed-yield.vercel.app shows current fixed rates, a live maturity ladder and a
@@ -37,6 +38,9 @@ early happens at the market price.
 | `propose_fixed_yield_deposit` | proposal | If the router needs an approval, returns an exact-amount approval (step 1 of 2). Otherwise returns the verified Pendle router deposit. Checks the balance first and refuses trades whose price impact is too high. |
 | `get_fixed_yield_positions` | read | PT holdings across all chains, valued in USD. Balances are read on-chain, and older or matured markets are found through Pendle's position index. Suggests a roll-over target. Chains whose RPC fails are listed in `chains_unavailable`, not silently skipped. |
 | `propose_fixed_yield_exit` | proposal | Redeems after maturity (`redeemPyToToken`) or sells early at the market price (`swapExactPtForToken`) into a token of the user's choice. Requests a PT approval first if needed. |
+| `propose_fixed_yield_limit_order` | proposal | Places an on-chain Pendle limit order to buy PT only once the fixed APY reaches `target_fixed_apy_pct`. It uses the Limit Router's `preSignSingle`, so no off-chain signature is needed, and is funded with the market's own SY tokens. An exact-amount approval to the Limit Router comes first. |
+| `get_fixed_yield_limit_orders` | read | The wallet's live Pendle limit orders on every chain: side, target APY, amount, filled amount, status and expiry. |
+| `propose_cancel_fixed_yield_limit_order` | proposal | Cancels one order on-chain (`cancelSingle`), after re-hashing Pendle's order data on-chain to prove it is exactly the `order_id` given. |
 | `propose_fixed_yield_rollover` | proposal | One transaction from an old PT into a later PT of the same asset, using Pendle Router `callAndReflect` through Pendle's Reflector. Works for matured PTs (redeemed) and active ones (sold at market). If no target is given, it picks the highest fixed rate on the same SY that matures at least 14 days out and has at least $50k of liquidity. |
 
 Each tool has a strict input and output schema and MCP annotations (`readOnlyHint` and the others). Amounts are
@@ -65,6 +69,10 @@ decimal strings converted to atomic units without floating point, and `"max"` me
     (`redeemPyToSy` or `swapExactPtForSy`), its second must be empty, and the reflected call must be
     `swapExactSyForPt` buying the requested new PT for the user.
   - the native value must equal the deposit amount (or be 0)
+- **Limit orders are rebuilt and checked before they are proposed.** The order from Pendle's generator must match the
+  request exactly: type `SY_FOR_PT`, maker and receiver = user, market's YT, token, amount, expiry before maturity,
+  `lnImpliedRate` within 1e-9 of ln(1 + target), a sane fail-safe rate, and an empty permit. It is then hashed
+  on-chain by the Limit Router (`0x000000000000c9B3E2C3Ec88B1B4c0cD853f4321` on all eight chains, from Pendle's deployments).
 - **Approvals are for the exact amount, never unlimited.** Mainnet USDT is reset to 0 first.
 - **Risky trades are refused.** A trade is refused when its price impact exceeds `max_price_impact_bps` (default 1%),
   or when Pendle reports no impact at all. Balances are checked before anything is proposed.
@@ -90,6 +98,7 @@ active roll-over) and that six tampered or mismatched routes are refused.
   - `/v3/{chainId}/markets/{market}/historical-data`
   - `/v1/sdk/{chainId}/markets/{market}/swapping-prices`
   - `/v2/limit-orders/book/{chainId}` (consolidated limit-order and AMM depth)
+  - `/v1/limit-orders/{chainId}/support-tokens/{yt}`, `/v1/limit-orders/makers/generate-limit-order-data`, `/v1/limit-orders/makers/limit-orders`
 - **On-chain reads.** Balances, allowances, decimals and symbols are read in one Multicall3 request per chain (viem).
 
 ## Chains
@@ -135,6 +144,7 @@ pnpm install --frozen-lockfile
 pnpm test                                    # typecheck, deterministic build x2, MCP conformance
 node scripts/qa.mjs [filter]                 # 48 live cases: happy paths, invalid input, error paths
 pnpm exec tsx scripts/check-routes.ts        # 12 live router-verification checks incl. tamper refusal
+node scripts/check-limit.mjs                 # 9 live limit-order checks; place and cancel are eth_call-simulated from a real maker
 pnpm exec tsx scripts/chain-probes.ts        # one approval probe per chain, for portal "Validate transaction"
 pnpm exec tsx scripts/find-sim-wallets.ts base [token]   # real wallets with router allowances, for smoke tests
 node scripts/smoke.mjs <tool> '<json>'       # call any tool once
@@ -144,8 +154,10 @@ The portal's "Validate transaction" always simulates from your own PayBox wallet
 or a roll-over therefore validates there only once that wallet actually holds the allowance or the PT.
 
 **Latest results:**
-- `pnpm test` passes: 8 tools and a deterministic bundle.
-- QA passes 48/48 and route checks pass 12/12.
+- `pnpm test` passes: 11 tools and a deterministic bundle.
+- QA passes 48/48, route checks pass 12/12, and limit-order checks pass 9/9.
+- The on-chain `hashOrder` of Pendle's order data matches Pendle's order id, and `preSignSingle` and `cancelSingle`
+  proposals both simulate without revert from a real maker.
 - A real deposit from the developer's PayBox wallet (0.002 native ETH into PT-sUSDai on Arbitrum, no approval needed)
   passes the portal's "Validate transaction" simulation, as does an exact-amount USDC approval on Base.
 - Hosted runs in the PayBox sandbox succeed:
@@ -162,7 +174,7 @@ or a roll-over therefore validates there only once that wallet actually holds th
 ## Layout
 
 ```
-src/plugin.ts     MCP server and the eight tools
+src/plugin.ts     MCP server and the eleven tools
 src/pendle.ts     Pendle API client, markets, prices, on-chain reads, route decoding and verification
 src/paybox.ts     PayBox proposal helpers from the starter kit (unchanged)
 scripts/          conformance (starter), QA, route checks, chain probes, smoke tools
@@ -171,8 +183,9 @@ site/             the static landing page deployed to Vercel (Three.js hero, liv
 
 ## Limitations
 
-- Limit orders are not supported, because they need typed-data signatures and PayBox proposals are EVM, Solana or x402
-  transactions only. PT looping is not supported, because it is leveraged and outside a fixed-yield product.
+- Limit orders can only be funded with the market's own SY tokens (Pendle's rule), and they fill when Pendle's keepers
+  match them, so a fill is not guaranteed. PT looping is not supported, because it is leveraged and outside a
+  fixed-yield product.
 - Hosted latency is 6â€“8 s for the heaviest calls (cross-chain positions, slow chains), against a 10 s limit. When
   Pendle or an RPC is slow, the call returns a clear error rather than a partial proposal.
 - The fixed rate is fixed only if the PT is held to maturity. This is not financial advice.

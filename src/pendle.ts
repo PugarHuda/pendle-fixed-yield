@@ -240,6 +240,89 @@ export async function ptBuyDepth(m: Market, levels = 6): Promise<{ apy: number; 
   });
 }
 
+// ---------------- limit orders ----------------
+// Pendle Limit Router, the same address on every chain (pendle-core-v2-public/deployments/<id>-core.json "limitRouter").
+export const LIMIT_ROUTER = "0x000000000000c9B3E2C3Ec88B1B4c0cD853f4321" as const;
+const orderTuple = { type: "tuple", name: "order", components: [
+  { name: "salt", type: "uint256" }, { name: "expiry", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "orderType", type: "uint8" },
+  { name: "token", type: "address" }, { name: "YT", type: "address" }, { name: "maker", type: "address" }, { name: "receiver", type: "address" },
+  { name: "makingAmount", type: "uint256" }, { name: "lnImpliedRate", type: "uint256" }, { name: "failSafeRate", type: "uint256" }, { name: "permit", type: "bytes" },
+] } as const;
+// From contracts/limit/PendleLimitRouter.sol: preSignSingle stores the order on-chain (maker must be msg.sender), so no EIP-712 signature is needed.
+export const limitRouterAbi = [
+  { type: "function", name: "preSignSingle", stateMutability: "nonpayable", inputs: [orderTuple], outputs: [] },
+  { type: "function", name: "cancelSingle", stateMutability: "nonpayable", inputs: [orderTuple], outputs: [] },
+  { type: "function", name: "hashOrder", stateMutability: "view", inputs: [orderTuple], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "nonce", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+] as const;
+export const SY_FOR_PT = 0;
+
+export interface LimitOrder {
+  salt: bigint; expiry: bigint; nonce: bigint; orderType: number; token: Address; YT: Address; maker: Address; receiver: Address;
+  makingAmount: bigint; lnImpliedRate: bigint; failSafeRate: bigint; permit: `0x${string}`;
+}
+const toOrder = (o: any): LimitOrder => ({
+  salt: BigInt(o.salt), expiry: BigInt(o.expiry), nonce: BigInt(o.nonce), orderType: Number(o.orderType ?? o.type), token: getAddress(o.token),
+  YT: getAddress(o.YT ?? o.yt), maker: getAddress(o.maker), receiver: getAddress(o.receiver), makingAmount: BigInt(o.makingAmount),
+  lnImpliedRate: BigInt(o.lnImpliedRate), failSafeRate: BigInt(o.failSafeRate), permit: (o.permit || "0x") as `0x${string}`,
+});
+export const lnRate = (apy: number) => BigInt(Math.round(Math.log1p(apy) * 1e18));
+export const apyFromLn = (ln: bigint) => Math.expm1(Number(ln) / 1e18);
+
+/** Tokens a market's limit orders can be funded with (the SY and the tokens it mints from). */
+export async function limitOrderTokens(m: Market): Promise<Address[]> {
+  const r = await request<{ tokenIns?: string[] }>(`/v1/limit-orders/${CHAINS[m.chain].id}/support-tokens/${m.yt}`);
+  return (r.tokenIns ?? []).map(addr);
+}
+
+/**
+ * Builds a "buy PT at this fixed APY" order with Pendle's generator, then checks every field against what was asked
+ * (Pendle's API is untrusted) and re-hashes it on-chain with the Limit Router.
+ */
+export async function buildPtLimitOrder(m: Market, a: { maker: Address; token: Address; amount: bigint; apy: number; expiry: number }) {
+  const raw = await request<any>("/v1/limit-orders/makers/generate-limit-order-data", { body: {
+    chainId: CHAINS[m.chain].id, YT: m.yt, orderType: SY_FOR_PT, token: a.token, maker: a.maker,
+    makingAmount: a.amount.toString(), impliedApy: a.apy, expiry: String(a.expiry),
+  } });
+  const order = toOrder(raw);
+  const bad = (what: string) => { throw new UserError(`Pendle's limit order has an unexpected ${what}; refusing to propose it.`); };
+  if (order.orderType !== SY_FOR_PT) bad("order type");
+  if (order.maker !== a.maker || order.receiver !== a.maker) bad("maker or receiver");
+  if (order.YT !== m.yt) bad("market");
+  if (order.token !== a.token) bad("token");
+  if (order.makingAmount !== a.amount) bad("amount");
+  if (order.expiry !== BigInt(a.expiry) || a.expiry * 1000 >= Date.parse(m.expiry)) bad("expiry");
+  // Within 1e-9 of ln(1 + apy): float rounding only.
+  const want = lnRate(a.apy), diff = order.lnImpliedRate > want ? order.lnImpliedRate - want : want - order.lnImpliedRate;
+  if (diff > 10n ** 9n) bad("rate");
+  // failSafeRate is the minimum SY per token when the token is minted into SY at fill time (SY itself ignores it).
+  if (order.failSafeRate > 10n ** 18n || (order.token !== m.sy && order.failSafeRate < 5n * 10n ** 17n)) bad("fail-safe rate");
+  if (order.permit !== "0x") bad("permit");
+  const c = client(m.chain);
+  const [onchainNonce, hash] = await Promise.all([
+    c.readContract({ address: LIMIT_ROUTER, abi: limitRouterAbi, functionName: "nonce", args: [a.maker] }),
+    c.readContract({ address: LIMIT_ROUTER, abi: limitRouterAbi, functionName: "hashOrder", args: [order] }),
+  ]);
+  if (order.nonce < onchainNonce) bad("nonce");
+  return { order, hash };
+}
+
+export interface MakerOrder { id: `0x${string}`; chain: ChainKey; order: LimitOrder; status: string; active: boolean; filledIn: bigint; filledOut: bigint }
+
+/** The maker's limit orders on one chain (only live ones unless activeOnly is false), as Pendle's book reports them. */
+export async function makerOrders(chain: ChainKey, maker: Address, activeOnly = true): Promise<MakerOrder[]> {
+  const r = await request<{ results?: any[] }>(`/v1/limit-orders/makers/limit-orders?chainId=${CHAINS[chain].id}&maker=${maker}&limit=50${activeOnly ? "&isActive=true" : ""}`);
+  return (r.results ?? []).map((o) => ({
+    id: o.id, chain, order: toOrder(o), status: String(o.orderState?.status ?? o.status ?? (o.isActive ? "ACTIVE" : "INACTIVE")),
+    active: Boolean(o.isActive) && !o.isCanceled, filledIn: BigInt(o.orderFilledStatus?.netInputFromMaker ?? 0), filledOut: BigInt(o.orderFilledStatus?.netOutputToMaker ?? 0),
+  }));
+}
+
+/** Re-hash an order on-chain; used to prove a cancel targets exactly the order the user named. */
+export async function hashOrderOnChain(chain: ChainKey, order: LimitOrder) {
+  return client(chain).readContract({ address: LIMIT_ROUTER, abi: limitRouterAbi, functionName: "hashOrder", args: [order] });
+}
+
 export interface PendlePosition { chain: ChainKey; market: Address }
 
 /** Markets Pendle has indexed for this wallet across all chains (cached by Pendle up to ~24h); used to discover
@@ -263,7 +346,7 @@ const getEthBalanceAbi = [{ type: "function", name: "getEthBalance", stateMutabi
 export interface TokenState { token: Address; native: boolean; symbol: string; decimals: number; balance: bigint; allowance: bigint }
 
 /** Balance, decimals, symbol and router allowance of `token` for `owner`, in one multicall. */
-export async function tokenState(chain: ChainKey, token: Address | "native", owner: Address): Promise<TokenState> {
+export async function tokenState(chain: ChainKey, token: Address | "native", owner: Address, spender: Address = ROUTER): Promise<TokenState> {
   const c = client(chain);
   try {
     if (token === "native") {
@@ -276,7 +359,7 @@ export async function tokenState(chain: ChainKey, token: Address | "native", own
         { address: token, abi: erc20Abi, functionName: "decimals" },
         { address: token, abi: erc20Abi, functionName: "symbol" },
         { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
-        { address: token, abi: erc20Abi, functionName: "allowance", args: [owner, ROUTER] },
+        { address: token, abi: erc20Abi, functionName: "allowance", args: [owner, spender] },
       ],
     });
     return { token, native: false, symbol, decimals, balance, allowance };
@@ -296,6 +379,19 @@ export async function symbols(chain: ChainKey, tokens: Address[]): Promise<Map<A
   return new Map(tokens.map((t, i) => {
     const r = results[i];
     return [t, r?.status === "success" ? String(r.result) : `${t.slice(0, 6)}…${t.slice(-4)}`];
+  }));
+}
+
+/** Symbol and decimals for many tokens in one multicall (unknown → shortened address, 18). */
+export async function tokenMeta(chain: ChainKey, tokens: Address[]): Promise<Map<Address, { symbol: string; decimals: number }>> {
+  if (!tokens.length) return new Map();
+  const results = await client(chain).multicall({
+    multicallAddress: MULTICALL3, allowFailure: true,
+    contracts: tokens.flatMap((t) => [{ address: t, abi: erc20Abi, functionName: "symbol" } as const, { address: t, abi: erc20Abi, functionName: "decimals" } as const]),
+  }).catch(() => []);
+  return new Map(tokens.map((t, i) => {
+    const [sym, dec] = [results[2 * i], results[2 * i + 1]];
+    return [t, { symbol: sym?.status === "success" ? String(sym.result) : `${t.slice(0, 6)}…${t.slice(-4)}`, decimals: dec?.status === "success" ? Number(dec.result) : 18 }];
   }));
 }
 

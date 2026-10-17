@@ -5,6 +5,7 @@ import * as z from "zod/v4";
 import { atomicAmount, evmOutputSchema, proposeEvm } from "./paybox.js";
 import {
   activeMarkets, CHAIN_KEYS, CHAINS, convert, daysLeft, elapsed, findMarket, history, indexedMarkets, marketsById, maturityMultiplier,
+  apyFromLn, buildPtLimitOrder, hashOrderOnChain, LIMIT_ROUTER, limitOrderTokens, limitRouterAbi, makerOrders, tokenMeta,
   NATIVE, prices, ptBalances, ptBuyDepth, ptRate, riskFlags, ROUTER, symbols, tokenState, UserError, type ChainKey, type Market,
 } from "./pendle.js";
 
@@ -47,12 +48,12 @@ function withSummary(proposal: ReturnType<typeof proposeEvm>, summary: string) {
 // Mainnet USDT reverts when changing a nonzero allowance; it must be reset to 0 first.
 const RESET_FIRST = new Set(["ethereum:0xdAC17F958D2ee523a2206206994597C13D831ec7"]);
 
-/** Approval proposal for exactly `amount` (never unlimited) to the Pendle router. */
-function proposeApproval(c: ChainKey, tokenAddress: Address, amount: bigint, current: bigint, summary: string, retryTool: string) {
+/** Approval proposal for exactly `amount` (never unlimited) to the Pendle router, or to the Limit Router for limit orders. */
+function proposeApproval(c: ChainKey, tokenAddress: Address, amount: bigint, current: bigint, summary: string, retryTool: string, spender: Address = ROUTER) {
   const reset = current > 0n && RESET_FIRST.has(`${c}:${tokenAddress}`);
   const proposal = proposeEvm({
     chain: chainId(c), to: tokenAddress, value: "0",
-    data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [ROUTER, reset ? 0n : amount] }),
+    data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [spender, reset ? 0n : amount] }),
   });
   const text = reset
     ? `Step 1 of 3: this token needs its existing allowance reset to 0 first. After it confirms, call ${retryTool} again with the same arguments.`
@@ -88,7 +89,7 @@ const riskFlagList = z.array(z.string()).describe("low_liquidity, short_maturity
 
 function createServer() {
   const server = new McpServer(
-    { name: "pendle-fixed-yield", version: "2.1.0" },
+    { name: "pendle-fixed-yield", version: "2.2.0" },
     { supportedProtocolVersions: [PROTOCOL_VERSION] },
   );
 
@@ -555,6 +556,121 @@ function createServer() {
       proposeEvm({ chain: chainId(args.chain), to: route.tx.to, value: route.tx.value, data: route.tx.data }),
       `Roll ${shown} PT-${from.name} (${from.active ? `matures ${day(from.expiry)}, sold at market` : `matured ${day(from.expiry)}`}) into ~${newPt} PT-${to.name} `
         + `at ${pct(route.effectiveApy ?? to.fixedApy)}% fixed until ${day(to.expiry)}, in one transaction. Max slippage ${args.slippage_bps / 100}%.`,
+    );
+  }));
+
+  // ---------------- limit orders: buy PT only if the fixed rate reaches a target ----------------
+  server.registerTool("propose_fixed_yield_limit_order", {
+    title: "Propose a Pendle limit order for a target fixed rate",
+    description: "Builds an unsigned PayBox transaction that places an on-chain Pendle limit order to buy a market's PT only when its fixed APY "
+      + "reaches target_fixed_apy_pct (above today's rate). It uses the Limit Router's preSignSingle, so no off-chain signature is needed. "
+      + "The tokens stay in the wallet until Pendle's keepers fill the order. Funding tokens are limited to the market's own SY tokens "
+      + "(the tool lists them if another is given). An exact-amount approval to the Limit Router comes first (step 1 of 2). "
+      + "Track with get_fixed_yield_limit_orders; cancel with propose_cancel_fixed_yield_limit_order.",
+    inputSchema: z.object({
+      chain, market: marketAddress, wallet_address: wallet,
+      token_in: evmAddress.describe("ERC-20 that funds the order; must be one the market's limit orders accept."),
+      amount: decimalAmount.describe("Human amount of token_in."),
+      target_fixed_apy_pct: z.number().gt(0).max(500).describe("Fixed APY at which to buy, e.g. 10 for 10%; must be above the current rate."),
+      expires_in_days: z.number().int().min(1).max(365).default(30),
+    }).strict(),
+    outputSchema: evmOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, (args) => guarded(async () => {
+    const owner = getAddress(args.wallet_address);
+    const token = getAddress(args.token_in);
+    const m = await findMarket(args.chain, args.market);
+    if (!m.active) throw new UserError(`${m.name} matured on ${day(m.expiry)}; pick an active market.`);
+    const target = args.target_fixed_apy_pct / 100;
+    if (target <= m.fixedApy) {
+      throw new UserError(`PT-${m.name} already pays ${pct(m.fixedApy)}% fixed, at or above the ${args.target_fixed_apy_pct}% target; `
+        + "use propose_fixed_yield_deposit to lock it now.");
+    }
+    const expiry = Math.floor(Date.now() / 1000) + args.expires_in_days * 86_400;
+    if (expiry * 1000 >= Date.parse(m.expiry)) {
+      throw new UserError(`The order must expire before the market matures on ${day(m.expiry)}; use at most ${Math.max(0, Math.floor(daysLeft(m.expiry)) - 1)} days.`);
+    }
+    const [accepted, state] = await Promise.all([limitOrderTokens(m), tokenState(args.chain, token, owner, LIMIT_ROUTER)]);
+    if (!accepted.includes(token)) {
+      const names = await symbols(args.chain, accepted);
+      throw new UserError(`PT-${m.name} limit orders can't be funded with ${state.symbol}. Accepted: ${accepted.map((t) => `${names.get(t)} (${t})`).join(", ")}.`);
+    }
+    const amount = parseAmount(args.amount, state.decimals);
+    if (amount === 0n) throw new UserError("Amount must be greater than zero.");
+    if (state.balance < amount) throw new UserError(`Wallet holds ${formatUnits(state.balance, state.decimals)} ${state.symbol}, less than ${args.amount}.`);
+    if (state.allowance < amount) {
+      return proposeApproval(args.chain, token, amount, state.allowance,
+        `approve Pendle's Limit Router to spend exactly ${args.amount} ${state.symbol} when the order fills.`, "propose_fixed_yield_limit_order", LIMIT_ROUTER);
+    }
+    const { order, hash } = await buildPtLimitOrder(m, { maker: owner, token, amount, apy: target, expiry });
+    return withSummary(
+      proposeEvm({ chain: chainId(args.chain), to: LIMIT_ROUTER, value: "0", data: encodeFunctionData({ abi: limitRouterAbi, functionName: "preSignSingle", args: [order] }) }),
+      `Place a limit order: buy PT-${m.name} with ${args.amount} ${state.symbol} once its fixed rate reaches ${args.target_fixed_apy_pct}% (now ${pct(m.fixedApy)}%), `
+        + `valid until ${new Date(expiry * 1000).toISOString().slice(0, 10)}. The ${state.symbol} stays in the wallet until the order fills; keep the balance and approval in place. `
+        + `Order ${hash}.`,
+    );
+  }));
+
+  const orderRow = z.object({
+    chain, order_id: z.string(), market: z.string().nullable(), name: z.string().nullable(), side: z.string(), status: z.string(), active: z.boolean(),
+    target_fixed_apy_pct: z.number(), token: z.string(), token_symbol: z.string(), amount: z.string(), filled_from_maker: z.string(), expires: z.string(),
+  }).strict();
+  const SIDES = ["buy PT", "sell PT", "buy YT", "sell YT"];
+
+  server.registerTool("get_fixed_yield_limit_orders", {
+    title: "List Pendle limit orders",
+    description: "Lists the wallet's Pendle limit orders across PayBox chains, from Pendle's order book: side, target fixed APY, amount, how much has filled, status and expiry. "
+      + "Use the order_id with propose_cancel_fixed_yield_limit_order.",
+    inputSchema: z.object({ wallet_address: wallet, chain: chainFilter, include_inactive: z.boolean().default(false) }).strict(),
+    outputSchema: z.object({ orders: z.array(orderRow), chains_unavailable: z.array(z.string()) }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, (args) => guarded(async () => {
+    const owner = getAddress(args.wallet_address);
+    const chains: ChainKey[] = args.chain === "all" ? [...CHAIN_KEYS] : [args.chain];
+    const [settled, active] = await Promise.all([Promise.allSettled(chains.map((c) => makerOrders(c, owner, !args.include_inactive))), activeMarkets().catch(() => [] as Market[])]);
+    const unavailable = chains.filter((_, i) => settled[i]!.status === "rejected");
+    const all = settled.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).filter((o) => args.include_inactive || o.active);
+    const metas = new Map<ChainKey, Map<Address, { symbol: string; decimals: number }>>();
+    await Promise.all([...new Set(all.map((o) => o.chain))].map(async (c) =>
+      metas.set(c, await tokenMeta(c, [...new Set(all.filter((o) => o.chain === c).map((o) => o.order.token))]))));
+    const orders = all.map((o) => {
+      const m = active.find((x) => x.chain === o.chain && x.yt === o.order.YT);
+      const meta = metas.get(o.chain)?.get(o.order.token) ?? { symbol: o.order.token, decimals: 18 };
+      return {
+        chain: o.chain, order_id: o.id, market: m?.address ?? null, name: m?.name ?? null, side: SIDES[o.order.orderType] ?? "unknown", status: o.status, active: o.active,
+        target_fixed_apy_pct: pct(apyFromLn(o.order.lnImpliedRate)), token: o.order.token, token_symbol: meta.symbol,
+        amount: formatUnits(o.order.makingAmount, meta.decimals), filled_from_maker: formatUnits(o.filledIn, meta.decimals),
+        expires: new Date(Number(o.order.expiry) * 1000).toISOString().slice(0, 10),
+      };
+    });
+    const lines = orders.map((o) => `${o.side} ${o.name ? `PT-${o.name}` : o.order_id.slice(0, 10)} on ${o.chain} at ${o.target_fixed_apy_pct}% fixed: `
+      + `${o.amount} ${o.token_symbol}, filled ${o.filled_from_maker}, ${o.status}, expires ${o.expires} (id ${o.order_id})`);
+    return {
+      content: [{ type: "text" as const, text: (lines.length ? lines.join("\n") : "No open Pendle limit orders for this wallet.")
+        + (unavailable.length ? `\nCould not reach Pendle for: ${unavailable.join(", ")}.` : "") }],
+      structuredContent: { orders, chains_unavailable: unavailable },
+    };
+  }));
+
+  server.registerTool("propose_cancel_fixed_yield_limit_order", {
+    title: "Propose cancelling a Pendle limit order",
+    description: "Builds an unsigned PayBox transaction that cancels one of the wallet's Pendle limit orders on-chain (Limit Router cancelSingle). "
+      + "The order is re-hashed on-chain first, so the cancel can only target the order_id given.",
+    inputSchema: z.object({ chain, wallet_address: wallet, order_id: z.string().regex(/^0x[0-9a-fA-F]{64}$/).describe("From get_fixed_yield_limit_orders.") }).strict(),
+    outputSchema: evmOutputSchema,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, (args) => guarded(async () => {
+    const owner = getAddress(args.wallet_address);
+    const found = (await makerOrders(args.chain, owner)).find((o) => o.id.toLowerCase() === args.order_id.toLowerCase());
+    if (!found) throw new UserError(`No limit order ${args.order_id} from this wallet on ${args.chain}.`);
+    if (!found.active) throw new UserError(`That order is already ${found.status.toLowerCase()}; nothing to cancel.`);
+    if (found.order.maker !== owner) throw new UserError("That order belongs to a different maker; refusing to propose it.");
+    const hash = await hashOrderOnChain(args.chain, found.order);
+    if (hash.toLowerCase() !== args.order_id.toLowerCase()) throw new UserError("Pendle's order data does not hash to that order_id; refusing to propose a cancel.");
+    return withSummary(
+      proposeEvm({ chain: chainId(args.chain), to: LIMIT_ROUTER, value: "0", data: encodeFunctionData({ abi: limitRouterAbi, functionName: "cancelSingle", args: [found.order] }) }),
+      `Cancel limit order ${args.order_id} on ${args.chain} (${SIDES[found.order.orderType] ?? "order"} at ${pct(apyFromLn(found.order.lnImpliedRate))}% fixed). `
+        + "The token approval to the Limit Router stays; it can be set back to 0 separately.",
     );
   }));
 
