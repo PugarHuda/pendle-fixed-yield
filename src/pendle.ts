@@ -349,7 +349,8 @@ export interface TokenState { token: Address; native: boolean; symbol: string; d
 export async function tokenState(chain: ChainKey, token: Address | "native", owner: Address, spender: Address = ROUTER): Promise<TokenState> {
   const c = client(chain);
   try {
-    if (token === "native") {
+    // Agents often pass the zero address or the 0xEeee… sentinel for the gas token; treat both as "native".
+    if (token === "native" || token === NATIVE || token.toLowerCase() === "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
       const balance = await c.readContract({ address: MULTICALL3, abi: getEthBalanceAbi, functionName: "getEthBalance", args: [owner] });
       return { token: NATIVE, native: true, symbol: CHAINS[chain].native, decimals: 18, balance, allowance: 2n ** 256n - 1n };
     }
